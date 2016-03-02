@@ -248,6 +248,10 @@
 /*                                                                           */
 /*****************************************************************************/
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 struct triangulateio {
   REAL *pointlist;                                               /* In / out */
   REAL *pointattributelist;                                      /* In / out */
@@ -282,3 +286,7 @@ struct triangulateio {
 void triangulate(char *, struct triangulateio *, struct triangulateio *,
                  struct triangulateio *);
 void trifree(VOID *memptr);
+
+#ifdef __cplusplus
+}
+#endif
