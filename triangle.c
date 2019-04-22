@@ -4888,6 +4888,7 @@ struct osub *newsubseg;
 /*                                                                           */
 /*****************************************************************************/
 
+static
 void exactinit()
 {
   REAL half;
@@ -4961,6 +4962,7 @@ void exactinit()
 /*                                                                           */
 /*****************************************************************************/
 
+static
 #ifdef ANSI_DECLARATORS
 int fast_expansion_sum_zeroelim(int elen, REAL *e, int flen, REAL *f, REAL *h)
 #else /* not ANSI_DECLARATORS */
@@ -5055,6 +5057,7 @@ REAL *h;
 /*                                                                           */
 /*****************************************************************************/
 
+static
 #ifdef ANSI_DECLARATORS
 int scale_expansion_zeroelim(int elen, REAL *e, REAL b, REAL *h)
 #else /* not ANSI_DECLARATORS */
@@ -5111,6 +5114,7 @@ REAL *h;
 /*                                                                           */
 /*****************************************************************************/
 
+static
 #ifdef ANSI_DECLARATORS
 REAL estimate(int elen, REAL *e)
 #else /* not ANSI_DECLARATORS */
@@ -5308,6 +5312,7 @@ vertex pc;
 /*                                                                           */
 /*****************************************************************************/
 
+static
 #ifdef ANSI_DECLARATORS
 REAL incircleadapt(vertex pa, vertex pb, vertex pc, vertex pd, REAL permanent)
 #else /* not ANSI_DECLARATORS */
@@ -5887,6 +5892,7 @@ REAL permanent;
   return finnow[finlength - 1];
 }
 
+static
 #ifdef ANSI_DECLARATORS
 REAL incircle(struct mesh *m, struct behavior *b,
               vertex pa, vertex pb, vertex pc, vertex pd)
@@ -5969,6 +5975,7 @@ vertex pd;
 /*                                                                           */
 /*****************************************************************************/
 
+static
 #ifdef ANSI_DECLARATORS
 REAL orient3dadapt(vertex pa, vertex pb, vertex pc, vertex pd,
                    REAL aheight, REAL bheight, REAL cheight, REAL dheight,
@@ -6394,6 +6401,7 @@ REAL permanent;
   return finnow[finlength - 1];
 }
 
+static
 #ifdef ANSI_DECLARATORS
 REAL orient3d(struct mesh *m, struct behavior *b,
               vertex pa, vertex pb, vertex pc, vertex pd,
