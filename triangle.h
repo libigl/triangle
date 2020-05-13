@@ -248,6 +248,12 @@
 /*                                                                           */
 /*****************************************************************************/
 
+#ifdef SINGLE
+#define REAL float
+#else /* not SINGLE */
+#define REAL double
+#endif /* not SINGLE */
+
 #ifdef __cplusplus
 extern "C" {
 #endif
