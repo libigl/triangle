@@ -254,6 +254,8 @@
 #define REAL double
 #endif /* not SINGLE */
 
+#define VOID int
+
 #ifdef __cplusplus
 extern "C" {
 #endif
