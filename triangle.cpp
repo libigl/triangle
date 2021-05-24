@@ -11623,6 +11623,12 @@ vertex searchpoint;
   REAL leftccw, rightccw;
   int leftflag, rightflag;
   triangle ptr;           /* Temporary variable used by onext() and oprev(). */
+  int iter;
+  // Number of iterations allowed before throwing an exception and declaring
+  // this to be hitting a bug that causes an infinite loop.
+  //
+  // Valid worst case: vertex is incident on every face. 
+  int max_iter = 2*m->triangles.items+100;
 
   org(*searchtri, startvertex);
   dest(*searchtri, rightvertex);
@@ -11643,6 +11649,7 @@ vertex searchpoint;
       rightflag = 0;
     }
   }
+  iter = 0;
   while (leftflag) {
     /* Turn left until satisfied. */
     onextself(*searchtri);
@@ -11657,7 +11664,14 @@ vertex searchpoint;
     rightccw = leftccw;
     leftccw = counterclockwise(m, b, searchpoint, startvertex, leftvertex);
     leftflag = leftccw > 0.0;
+    iter++;
+    if(iter>max_iter)
+    {
+      printf("Bailing out after %d iterations in finddirection().\n",iter);
+      internalerror();
+    }
   }
+  iter = 0;
   while (rightflag) {
     /* Turn right until satisfied. */
     oprevself(*searchtri);
@@ -11672,6 +11686,12 @@ vertex searchpoint;
     leftccw = rightccw;
     rightccw = counterclockwise(m, b, startvertex, searchpoint, rightvertex);
     rightflag = rightccw > 0.0;
+    iter++;
+    if(iter>max_iter)
+    {
+      printf("Bailing out after %d iterations in finddirection().\n",iter);
+      internalerror();
+    }
   }
   if (leftccw == 0.0) {
     return LEFTCOLLINEAR;
