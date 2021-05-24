@@ -367,8 +367,8 @@
 /* A few forward declarations.                                               */
 
 #ifndef TRILIBRARY
-char *readline();
-char *findfield();
+char *readline(char *string, FILE *infile, char *infilename);
+char *findfield(char *string);
 #endif /* not TRILIBRARY */
 
 /* Labels that signify the result of point location.  The result of a        */
