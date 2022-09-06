@@ -249,10 +249,6 @@
 /*****************************************************************************/
 #pragma once
 
-#ifndef ANSI_DECLARATORS
-#define ANSI_DECLARATORS
-#endif // ANSI_DECLARATORS
-
 #ifdef SINGLE
 #define TRI_REAL float
 #else /* not SINGLE */
