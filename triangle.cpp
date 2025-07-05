@@ -308,12 +308,6 @@
 #define DEADVERTEX -32768
 #define UNDEADVERTEX -32767
 
-/* The next line is used to outsmart some very stupid compilers.  If your    */
-/*   compiler is smarter, feel free to replace the "int" with "void".        */
-/*   Not that it matters.                                                    */
-
-#define VOID int
-
 /* Two constants for algorithms based on random sampling.  Both constants    */
 /*   have been chosen empirically to optimize their respective algorithms.   */
 
@@ -339,11 +333,6 @@
 /* And here's one for those of you who are intimidated by math.              */
 
 #define ONETHIRD 0.333333333333333333333333333333333333333333333333333333333333
-
-
-/* Define the size large enough to store and operate on a pointer.           */
-#define INT_PTR unsigned long long
-
 
 #include <cstdio>
 #include <cstdlib>
@@ -586,7 +575,7 @@ struct flipstacker {
 
 struct event {
   REAL xkey, ykey;                              /* Coordinates of the event. */
-  VOID *eventptr;      /* Can be a vertex or the location of a circle event. */
+  void *eventptr;      /* Can be a vertex or the location of a circle event. */
   int heapposition;              /* Marks this event's position in the heap. */
 };
 
@@ -631,11 +620,11 @@ struct splaynode {
 /*   number of records kept on deaditemstack.                                */
 
 struct memorypool {
-  VOID **firstblock, **nowblock;
-  VOID *nextitem;
-  VOID *deaditemstack;
-  VOID **pathblock;
-  VOID *pathitem;
+  void **firstblock, **nowblock;
+  void *nextitem;
+  void *deaditemstack;
+  void **pathblock;
+  void *pathitem;
   int alignbytes;
   int itembytes;
   int itemsperblock;
@@ -934,27 +923,45 @@ struct behavior {
 
 /* Fast lookup arrays to speed some of the mesh manipulation primitives.     */
 
-int plus1mod3[3] = {1, 2, 0};
-int minus1mod3[3] = {2, 0, 1};
+constexpr int plus1mod3[3] = {1, 2, 0};
+constexpr int minus1mod3[3] = {2, 0, 1};
 
 /********* Primitives for triangles                                  *********/
 /*                                                                           */
 /*                                                                           */
 
+[[gnu::always_inline]] inline intptr_t get_orientation(const triangle& tri)
+{
+  return reinterpret_cast<const intptr_t>(tri) & intptr_t(3);
+}
+
+[[gnu::always_inline]] inline triangle* disorient(const triangle& tri, intptr_t orient)
+{
+  return reinterpret_cast<triangle*>(reinterpret_cast<const intptr_t>(tri) ^ orient);
+}
+
+[[gnu::always_inline]] inline triangle reorient(triangle* tri, intptr_t orient)
+{
+  return reinterpret_cast<triangle>(reinterpret_cast<intptr_t>(tri) | orient);
+}
+
 /* decode() converts a pointer to an oriented triangle.  The orientation is  */
 /*   extracted from the two least significant bits of the pointer.           */
 
-#define decode(ptr, otri)                                                     \
-  (otri).orient = (int) ((INT_PTR) (ptr) & (INT_PTR) 3l);                     \
-  (otri).tri = (triangle *)                                                   \
-                  ((INT_PTR) (ptr) ^ (INT_PTR) (otri).orient)
+[[gnu::always_inline]] inline void decode(const triangle& tri, otri& ori_tri)
+{
+  ori_tri.orient = int(get_orientation(tri));
+  ori_tri.tri = disorient(tri, ori_tri.orient);
+}
 
 /* encode() compresses an oriented triangle into a single pointer.  It       */
 /*   relies on the assumption that all triangles are aligned to four-byte    */
 /*   boundaries, so the two least significant bits of (otri).tri are zero.   */
 
-#define encode(otri)                                                          \
-  (triangle) ((INT_PTR) (otri).tri | (INT_PTR) (otri).orient)
+[[gnu::always_inline]] inline triangle encode(otri& ori_tri)
+{
+  return reorient(ori_tri.tri, ori_tri.orient);
+}
 
 /* The following handle manipulation primitives are all described by Guibas  */
 /*   and Stolfi.  However, Guibas and Stolfi use an edge-based data          */
@@ -964,196 +971,264 @@ int minus1mod3[3] = {2, 0, 1};
 /*   direction is necessarily reversed, because the handle specified by an   */
 /*   oriented triangle is directed counterclockwise around the triangle.     */
 
-#define sym(otri1, otri2)                                                     \
-  ptr = (otri1).tri[(otri1).orient];                                          \
-  decode(ptr, otri2);
+[[gnu::always_inline]] inline void sym(const otri& a, otri& b)
+{
+  decode(a.tri[a.orient], b);
+}
 
-#define symself(otri)                                                         \
-  ptr = (otri).tri[(otri).orient];                                            \
-  decode(ptr, otri);
+[[gnu::always_inline]] inline void symself(otri& a)
+{
+  sym(a,a);
+}
 
 /* lnext() finds the next edge (counterclockwise) of a triangle.             */
 
-#define lnext(otri1, otri2)                                                   \
-  (otri2).tri = (otri1).tri;                                                  \
-  (otri2).orient = plus1mod3[(otri1).orient]
+[[gnu::always_inline]] inline void lnext(const otri& a, otri& b)
+{
+  b.tri = a.tri;
+  b.orient = plus1mod3[a.orient];
+}
 
-#define lnextself(otri)                                                       \
-  (otri).orient = plus1mod3[(otri).orient]
+[[gnu::always_inline]] inline void lnextself(otri& a)
+{
+  a.orient = plus1mod3[a.orient];
+}
 
 /* lprev() finds the previous edge (clockwise) of a triangle.                */
 
-#define lprev(otri1, otri2)                                                   \
-  (otri2).tri = (otri1).tri;                                                  \
-  (otri2).orient = minus1mod3[(otri1).orient]
+[[gnu::always_inline]] inline void lprev(const otri& a, otri& b)
+{
+  b.tri = a.tri;
+  b.orient = minus1mod3[a.orient];
+}
 
-#define lprevself(otri)                                                       \
-  (otri).orient = minus1mod3[(otri).orient]
-
+[[gnu::always_inline]] inline void lprevself(otri& a)
+{
+  a.orient = minus1mod3[a.orient];
+}
 /* onext() spins counterclockwise around a vertex; that is, it finds the     */
 /*   next edge with the same origin in the counterclockwise direction.  This */
 /*   edge is part of a different triangle.                                   */
 
-#define onext(otri1, otri2)                                                   \
-  lprev(otri1, otri2);                                                        \
-  symself(otri2);
+[[gnu::always_inline]] inline void onext(const otri& a, otri& b)
+{
+  lprev(a, b);
+  symself(b);
+}
 
-#define onextself(otri)                                                       \
-  lprevself(otri);                                                            \
-  symself(otri);
+[[gnu::always_inline]] inline void onextself(otri& a)
+{
+  onext(a, a);
+}
 
 /* oprev() spins clockwise around a vertex; that is, it finds the next edge  */
 /*   with the same origin in the clockwise direction.  This edge is part of  */
 /*   a different triangle.                                                   */
 
-#define oprev(otri1, otri2)                                                   \
-  sym(otri1, otri2);                                                          \
-  lnextself(otri2);
+[[gnu::always_inline]] inline void oprev(const otri& a, otri& b)
+{
+  sym(a, b);
+  lnextself(b);
+}
 
-#define oprevself(otri)                                                       \
-  symself(otri);                                                              \
-  lnextself(otri);
+[[gnu::always_inline]] inline void oprevself(otri& a)
+{
+  oprev(a, a);
+}
 
 /* dnext() spins counterclockwise around a vertex; that is, it finds the     */
 /*   next edge with the same destination in the counterclockwise direction.  */
 /*   This edge is part of a different triangle.                              */
 
-#define dnext(otri1, otri2)                                                   \
-  sym(otri1, otri2);                                                          \
-  lprevself(otri2);
+[[gnu::always_inline]] inline void dnext(const otri& a, otri& b)
+{
+  sym(a, b);
+  lprevself(b);
+}
 
-#define dnextself(otri)                                                       \
-  symself(otri);                                                              \
-  lprevself(otri);
+[[gnu::always_inline]] inline void dnextself(otri& a)
+{
+  dnext(a, a);
+}
 
 /* dprev() spins clockwise around a vertex; that is, it finds the next edge  */
 /*   with the same destination in the clockwise direction.  This edge is     */
 /*   part of a different triangle.                                           */
 
-#define dprev(otri1, otri2)                                                   \
-  lnext(otri1, otri2);                                                        \
-  symself(otri2);
+[[gnu::always_inline]] inline void dprev(const otri& a, otri& b)
+{
+  lnext(a, b);
+  symself(b);
+}
 
-#define dprevself(otri)                                                       \
-  lnextself(otri);                                                            \
-  symself(otri);
+[[gnu::always_inline]] inline void dprevself(otri& a)
+{
+  dprev(a, a);
+}
 
 /* rnext() moves one edge counterclockwise about the adjacent triangle.      */
 /*   (It's best understood by reading Guibas and Stolfi.  It involves        */
 /*   changing triangles twice.)                                              */
 
-#define rnext(otri1, otri2)                                                   \
-  sym(otri1, otri2);                                                          \
-  lnextself(otri2);                                                           \
-  symself(otri2);
+[[gnu::always_inline]] inline void rnext(const otri& a, otri& b)
+{
+  sym(a, b);
+  lnextself(b);
+  symself(b);
+}
 
-#define rnextself(otri)                                                       \
-  symself(otri);                                                              \
-  lnextself(otri);                                                            \
-  symself(otri);
+[[gnu::always_inline]] inline void rnextself(otri& a)
+{
+  rnext(a, a);
+}
 
 /* rprev() moves one edge clockwise about the adjacent triangle.             */
 /*   (It's best understood by reading Guibas and Stolfi.  It involves        */
 /*   changing triangles twice.)                                              */
 
-#define rprev(otri1, otri2)                                                   \
-  sym(otri1, otri2);                                                          \
-  lprevself(otri2);                                                           \
-  symself(otri2);
+[[gnu::always_inline]] inline void rprev(const otri& a, otri& b)
+{
+  sym(a, b);
+  lprevself(b);
+  symself(b);
+}
 
-#define rprevself(otri)                                                       \
-  symself(otri);                                                              \
-  lprevself(otri);                                                            \
-  symself(otri);
+[[gnu::always_inline]] inline void rprevself(otri& a)
+{
+  rprev(a, a);
+}
 
 /* These primitives determine or set the origin, destination, or apex of a   */
 /* triangle.                                                                 */
 
-#define org(otri, vertexptr)                                                  \
-  vertexptr = (vertex) (otri).tri[plus1mod3[(otri).orient] + 3]
+[[gnu::always_inline]] inline void org(const otri& a, vertex& v)
+{
+  v = reinterpret_cast<vertex>(a.tri[plus1mod3[a.orient] + 3]);
+}
 
-#define dest(otri, vertexptr)                                                 \
-  vertexptr = (vertex) (otri).tri[minus1mod3[(otri).orient] + 3]
+[[gnu::always_inline]] inline void dest(const otri& a, vertex& v)
+{
+  v = reinterpret_cast<vertex>(a.tri[minus1mod3[a.orient] + 3]);
+}
 
-#define apex(otri, vertexptr)                                                 \
-  vertexptr = (vertex) (otri).tri[(otri).orient + 3]
+[[gnu::always_inline]] inline void apex(const otri& a, vertex& v)
+{
+  v = reinterpret_cast<vertex>(a.tri[a.orient + 3]);
+}
 
-#define setorg(otri, vertexptr)                                               \
-  (otri).tri[plus1mod3[(otri).orient] + 3] = (triangle) vertexptr
+[[gnu::always_inline]] inline void setorg(otri& a, const vertex& v)
+{
+  a.tri[plus1mod3[a.orient] + 3] = reinterpret_cast<triangle>(v);
+}
 
-#define setdest(otri, vertexptr)                                              \
-  (otri).tri[minus1mod3[(otri).orient] + 3] = (triangle) vertexptr
+[[gnu::always_inline]] inline void setdest(otri& a, const vertex& v)
+{
+  a.tri[minus1mod3[a.orient] + 3] = reinterpret_cast<triangle>(v);
+}
 
-#define setapex(otri, vertexptr)                                              \
-  (otri).tri[(otri).orient + 3] = (triangle) vertexptr
+[[gnu::always_inline]] inline void setapex(otri& a, const vertex& v)
+{
+  a.tri[a.orient + 3] = reinterpret_cast<triangle>(v);
+}
 
 /* Bond two triangles together.                                              */
 
-#define bond(otri1, otri2)                                                    \
-  (otri1).tri[(otri1).orient] = encode(otri2);                                \
-  (otri2).tri[(otri2).orient] = encode(otri1)
+[[gnu::always_inline]] inline void bond(otri& a, otri& b)
+{
+  a.tri[a.orient] = encode(b);
+  b.tri[b.orient] = encode(a);
+}
 
 /* Dissolve a bond (from one side).  Note that the other triangle will still */
 /*   think it's connected to this triangle.  Usually, however, the other     */
 /*   triangle is being deleted entirely, or bonded to another triangle, so   */
 /*   it doesn't matter.                                                      */
 
-#define dissolve(otri)                                                        \
-  (otri).tri[(otri).orient] = (triangle) m->dummytri
+[[gnu::always_inline]] inline void dissolve(mesh* m, otri& a)
+{
+  a.tri[a.orient] = reinterpret_cast<triangle>(m->dummytri);
+}
 
 /* Copy an oriented triangle.                                                */
 
-#define otricopy(otri1, otri2)                                                \
-  (otri2).tri = (otri1).tri;                                                  \
-  (otri2).orient = (otri1).orient
+[[gnu::always_inline]] inline void otricopy(const otri& a, otri& b)
+{
+  b.tri = a.tri;
+  b.orient = a.orient;
+}
 
 /* Test for equality of oriented triangles.                                  */
 
-#define otriequal(otri1, otri2)                                               \
-  (((otri1).tri == (otri2).tri) &&                                            \
-   ((otri1).orient == (otri2).orient))
+[[gnu::always_inline]] inline bool otriequal(const otri& a, const otri& b)
+{
+  return a.tri == b.tri && a.orient == b.orient;
+}
 
 /* Primitives to infect or cure a triangle with the virus.  These rely on    */
 /*   the assumption that all subsegments are aligned to four-byte boundaries.*/
 
-#define infect(otri)                                                          \
-  (otri).tri[6] = (triangle)                                                  \
-                    ((INT_PTR) (otri).tri[6] | (INT_PTR) 2l)
+constexpr intptr_t infection = 2;
+constexpr intptr_t disnfection = ~infection;
 
-#define uninfect(otri)                                                        \
-  (otri).tri[6] = (triangle)                                                  \
-                    ((INT_PTR) (otri).tri[6] & ~ (INT_PTR) 2l)
+
+[[gnu::always_inline]] inline void infect(otri& a)
+{
+  a.tri[6] = reinterpret_cast<triangle>(
+      reinterpret_cast<intptr_t>(a.tri[6]) | infection);
+}
+
+[[gnu::always_inline]] inline void uninfect(otri& a)
+{
+  a.tri[6] = reinterpret_cast<triangle>(
+      reinterpret_cast<intptr_t>(a.tri[6]) & disnfection);
+}
 
 /* Test a triangle for viral infection.                                      */
 
-#define infected(otri)                                                        \
-  (((INT_PTR) (otri).tri[6] & (INT_PTR) 2l) != 0l)
+[[gnu::always_inline]] inline bool infected(otri& a)
+{
+  return reinterpret_cast<intptr_t>(a.tri[6]) & infection;
+}
 
 /* Check or set a triangle's attributes.                                     */
 
-#define elemattribute(otri, attnum)                                           \
-  ((REAL *) (otri).tri)[m->elemattribindex + (attnum)]
+[[gnu::always_inline]] inline REAL& elemattribute(const mesh* m, otri& a, int attnum)
+{
+  return reinterpret_cast<REAL*>(a.tri)[m->elemattribindex + (attnum)];
+}
 
-#define setelemattribute(otri, attnum, value)                                 \
-  ((REAL *) (otri).tri)[m->elemattribindex + (attnum)] = value
+[[gnu::always_inline]] inline void setelemattribute(const mesh* m, otri& a, int attnum, REAL value)
+{
+  reinterpret_cast<REAL*>(a.tri)[m->elemattribindex + (attnum)] = value;
+}
 
 /* Check or set a triangle's maximum area bound.                             */
 
-#define areabound(otri)  ((REAL *) (otri).tri)[m->areaboundindex]
+[[gnu::always_inline]] inline REAL areabound(const mesh* m, otri& a)
+{
+  return reinterpret_cast<REAL*>(a.tri)[m->areaboundindex];
+}
 
-#define setareabound(otri, value)                                             \
-  ((REAL *) (otri).tri)[m->areaboundindex] = value
+[[gnu::always_inline]] inline void setareabound(const mesh* m, otri& a, REAL value)
+{
+  reinterpret_cast<REAL*>(a.tri)[m->areaboundindex] = value;
+}
 
 /* Check or set a triangle's deallocation.  Its second pointer is set to     */
 /*   NULL to indicate that it is not allocated.  (Its first pointer is used  */
 /*   for the stack of dead items.)  Its fourth pointer (its first vertex)    */
 /*   is set to NULL in case a `badtriang' structure points to it.            */
 
-#define deadtri(tria)  ((tria)[1] == (triangle) NULL)
+[[gnu::always_inline]] inline bool deadtri(const triangle* a)
+{
+  return a[1] == nullptr;
+}
 
-#define killtri(tria)                                                         \
-  (tria)[1] = (triangle) NULL;                                                \
-  (tria)[3] = (triangle) NULL
+[[gnu::always_inline]] inline void killtri(triangle* a)
+{
+  a[1] = nullptr;
+  a[3] = nullptr;
+}
 
 /********* Primitives for subsegments                                *********/
 /*                                                                           */
@@ -1164,119 +1239,165 @@ int minus1mod3[3] = {2, 0, 1};
 /*   least significant bits (one for orientation, one for viral infection)   */
 /*   are masked out to produce the real pointer.                             */
 
-#define sdecode(sptr, osub)                                                   \
-  (osub).ssorient = (int) ((INT_PTR) (sptr) & (INT_PTR) 1l);                  \
-  (osub).ss = (subseg *)                                                      \
-              ((INT_PTR) (sptr) & ~ (INT_PTR) 3l)
+
+[[gnu::always_inline]] inline void sdecode(const subseg& seg, osub& ori_sub)
+{
+  ori_sub.ssorient = int(reinterpret_cast<const intptr_t>(seg) & intptr_t(1));
+  ori_sub.ss = reinterpret_cast<subseg*>(reinterpret_cast<const intptr_t>(seg) & ~intptr_t(3));
+}
 
 /* sencode() compresses an oriented subsegment into a single pointer.  It    */
 /*   relies on the assumption that all subsegments are aligned to two-byte   */
 /*   boundaries, so the least significant bit of (osub).ss is zero.          */
 
-#define sencode(osub)                                                         \
-  (subseg) ((INT_PTR) (osub).ss | (INT_PTR) (osub).ssorient)
+[[gnu::always_inline]] inline subseg sencode(const osub& ori_sub)
+{
+  return reinterpret_cast<subseg>(reinterpret_cast<intptr_t>(ori_sub.ss) | ori_sub.ssorient);
+}
+
 
 /* ssym() toggles the orientation of a subsegment.                           */
 
-#define ssym(osub1, osub2)                                                    \
-  (osub2).ss = (osub1).ss;                                                    \
-  (osub2).ssorient = 1 - (osub1).ssorient
+[[gnu::always_inline]] inline void ssym(const osub& a, osub& b)
+{
+  b.ss = a.ss;
+  b.ssorient = 1 - a.ssorient;
+}
 
-#define ssymself(osub)                                                        \
-  (osub).ssorient = 1 - (osub).ssorient
+[[gnu::always_inline]] inline void ssymself(osub& a)
+{
+  a.ssorient = 1 - a.ssorient;
+}
 
 /* spivot() finds the other subsegment (from the same segment) that shares   */
 /*   the same origin.                                                        */
 
-#define spivot(osub1, osub2)                                                  \
-  sptr = (osub1).ss[(osub1).ssorient];                                        \
-  sdecode(sptr, osub2)
+[[gnu::always_inline]] inline void spivot(const osub& a, osub& b)
+{
+  sdecode(a.ss[a.ssorient], b);
+}
 
-#define spivotself(osub)                                                      \
-  sptr = (osub).ss[(osub).ssorient];                                          \
-  sdecode(sptr, osub)
+[[gnu::always_inline]] inline void spivotself(osub& a)
+{
+  spivot(a, a);
+}
 
 /* snext() finds the next subsegment (from the same segment) in sequence;    */
 /*   one whose origin is the input subsegment's destination.                 */
 
-#define snext(osub1, osub2)                                                   \
-  sptr = (osub1).ss[1 - (osub1).ssorient];                                    \
-  sdecode(sptr, osub2)
+[[gnu::always_inline]] inline void snext(const osub& a, osub& b)
+{
+  sdecode(a.ss[1 - a.ssorient], b);
+}
 
-#define snextself(osub)                                                       \
-  sptr = (osub).ss[1 - (osub).ssorient];                                      \
-  sdecode(sptr, osub)
+[[gnu::always_inline]] inline void snextself(osub& a)
+{
+  snext(a, a);
+}
 
 /* These primitives determine or set the origin or destination of a          */
 /*   subsegment or the segment that includes it.                             */
 
-#define sorg(osub, vertexptr)                                                 \
-  vertexptr = (vertex) (osub).ss[2 + (osub).ssorient]
+[[gnu::always_inline]] inline void sorg(const osub& a, vertex& v)
+{
+  v = reinterpret_cast<vertex>(a.ss[2 + a.ssorient]);
+}
 
-#define sdest(osub, vertexptr)                                                \
-  vertexptr = (vertex) (osub).ss[3 - (osub).ssorient]
+[[gnu::always_inline]] inline void sdest(const osub& a, vertex& v)
+{
+  v = reinterpret_cast<vertex>(a.ss[3 - a.ssorient]);
+}
 
-#define setsorg(osub, vertexptr)                                              \
-  (osub).ss[2 + (osub).ssorient] = (subseg) vertexptr
+[[gnu::always_inline]] inline void setsorg(osub& a, const vertex& v)
+{
+  a.ss[2 + a.ssorient] = reinterpret_cast<const subseg>(v);
+}
 
-#define setsdest(osub, vertexptr)                                             \
-  (osub).ss[3 - (osub).ssorient] = (subseg) vertexptr
+[[gnu::always_inline]] inline void setsdest(osub& a, const vertex& v)
+{
+  a.ss[3 - a.ssorient] = reinterpret_cast<const subseg>(v);
+}
 
-#define segorg(osub, vertexptr)                                               \
-  vertexptr = (vertex) (osub).ss[4 + (osub).ssorient]
+[[gnu::always_inline]] inline void segorg(const osub& a, vertex& v)
+{
+  v = reinterpret_cast<vertex>(a.ss[4 + a.ssorient]);
+}
 
-#define segdest(osub, vertexptr)                                              \
-  vertexptr = (vertex) (osub).ss[5 - (osub).ssorient]
+[[gnu::always_inline]] inline void segdest(const osub& a, vertex& v)
+{
+  v = reinterpret_cast<vertex>(a.ss[5 + a.ssorient]);
+}
 
-#define setsegorg(osub, vertexptr)                                            \
-  (osub).ss[4 + (osub).ssorient] = (subseg) vertexptr
+[[gnu::always_inline]] inline void setsegorg(const osub& a, vertex& v)
+{
+  a.ss[4 + a.ssorient] = reinterpret_cast<const subseg>(v);
+}
 
-#define setsegdest(osub, vertexptr)                                           \
-  (osub).ss[5 - (osub).ssorient] = (subseg) vertexptr
+[[gnu::always_inline]] inline void setsegdest(osub& a, const vertex& v)
+{
+  a.ss[5 + a.ssorient] = reinterpret_cast<const subseg>(v);;
+}
 
 /* These primitives read or set a boundary marker.  Boundary markers are     */
 /*   used to hold user-defined tags for setting boundary conditions in       */
 /*   finite element solvers.                                                 */
 
-#define mark(osub)  (* (int *) ((osub).ss + 8))
+[[gnu::always_inline]] inline int mark(const osub& a)
+{
+  return *reinterpret_cast<int*>(&a.ss[8]);
+}
 
-#define setmark(osub, value)                                                  \
-  * (int *) ((osub).ss + 8) = value
+[[gnu::always_inline]] inline void setmark(osub& a, int value)
+{
+  *reinterpret_cast<int*>(&a.ss[8]) = value;
+}
 
 /* Bond two subsegments together.                                            */
 
-#define sbond(osub1, osub2)                                                   \
-  (osub1).ss[(osub1).ssorient] = sencode(osub2);                              \
-  (osub2).ss[(osub2).ssorient] = sencode(osub1)
+[[gnu::always_inline]] inline void sbond(osub& a, osub& b)
+{
+  a.ss[a.ssorient] = sencode(b);
+  b.ss[b.ssorient] = sencode(a);
+}
 
 /* Dissolve a subsegment bond (from one side).  Note that the other          */
 /*   subsegment will still think it's connected to this subsegment.          */
 
-#define sdissolve(osub)                                                       \
-  (osub).ss[(osub).ssorient] = (subseg) m->dummysub
+[[gnu::always_inline]] inline void sdissolve(const mesh* m, osub& a)
+{
+  a.ss[a.ssorient] = reinterpret_cast<subseg>(m->dummysub);
+}
 
 /* Copy a subsegment.                                                        */
 
-#define subsegcopy(osub1, osub2)                                              \
-  (osub2).ss = (osub1).ss;                                                    \
-  (osub2).ssorient = (osub1).ssorient
+[[gnu::always_inline]] inline void subsegcopy(const osub& a, osub& b)
+{
+  b.ss = a.ss;
+  b.ssorient = a.ssorient;
+}
 
 /* Test for equality of subsegments.                                         */
 
-#define subsegequal(osub1, osub2)                                             \
-  (((osub1).ss == (osub2).ss) &&                                              \
-   ((osub1).ssorient == (osub2).ssorient))
+[[gnu::always_inline]] inline bool subsegcopy(const osub& a, const osub& b)
+{
+  return a.ss == b.ss && a.ssorient == b.ssorient;
+}
 
 /* Check or set a subsegment's deallocation.  Its second pointer is set to   */
 /*   NULL to indicate that it is not allocated.  (Its first pointer is used  */
 /*   for the stack of dead items.)  Its third pointer (its first vertex)     */
 /*   is set to NULL in case a `badsubseg' structure points to it.            */
 
-#define deadsubseg(sub)  ((sub)[1] == (subseg) NULL)
+[[gnu::always_inline]] inline bool deadsubseg(const subseg* sub)
+{
+  return sub[1] == nullptr;
+}
 
-#define killsubseg(sub)                                                       \
-  (sub)[1] = (subseg) NULL;                                                   \
-  (sub)[2] = (subseg) NULL
+[[gnu::always_inline]] inline void killsubseg(subseg* sub)
+{
+  sub[1] = nullptr;
+  sub[2] = nullptr;
+}
 
 /********* Primitives for interacting triangles and subsegments      *********/
 /*                                                                           */
@@ -1284,51 +1405,74 @@ int minus1mod3[3] = {2, 0, 1};
 
 /* tspivot() finds a subsegment abutting a triangle.                         */
 
-#define tspivot(otri, osub)                                                   \
-  sptr = (subseg) (otri).tri[6 + (otri).orient];                              \
-  sdecode(sptr, osub)
+[[gnu::always_inline]] inline void tspivot(const otri& a, osub& b)
+{
+  sdecode(reinterpret_cast<subseg>(a.tri[6 + a.orient]), b);
+}
 
 /* stpivot() finds a triangle abutting a subsegment.  It requires that the   */
 /*   variable `ptr' of type `triangle' be defined.                           */
 
-#define stpivot(osub, otri)                                                   \
-  ptr = (triangle) (osub).ss[6 + (osub).ssorient];                            \
-  decode(ptr, otri)
+[[gnu::always_inline]] inline void stpivot(const osub& a, otri& b)
+{
+  decode(reinterpret_cast<triangle>(a.ss[6 + a.ssorient]), b);
+}
 
 /* Bond a triangle to a subsegment.                                          */
 
-#define tsbond(otri, osub)                                                    \
-  (otri).tri[6 + (otri).orient] = (triangle) sencode(osub);                   \
-  (osub).ss[6 + (osub).ssorient] = (subseg) encode(otri)
+[[gnu::always_inline]] inline void tsbond(otri& a, osub& b)
+{
+  a.tri[6 + a.orient] = reinterpret_cast<triangle>(sencode(b));
+  b.ss[6 + b.ssorient] = reinterpret_cast<subseg>(encode(a));
+}
 
 /* Dissolve a bond (from the triangle side).                                 */
 
-#define tsdissolve(otri)                                                      \
-  (otri).tri[6 + (otri).orient] = (triangle) m->dummysub
+[[gnu::always_inline]] inline void tsdissolve(const mesh* m, otri& a)
+{
+  a.tri[6 + a.orient] = reinterpret_cast<triangle>(m->dummysub);
+}
 
 /* Dissolve a bond (from the subsegment side).                               */
 
-#define stdissolve(osub)                                                      \
-  (osub).ss[6 + (osub).ssorient] = (subseg) m->dummytri
+[[gnu::always_inline]] inline void stdissolve(const mesh* m, osub& a)
+{
+  a.ss[6 + a.ssorient] = reinterpret_cast<subseg>(m->dummytri);
+}
 
 /********* Primitives for vertices                                   *********/
 /*                                                                           */
 /*                                                                           */
 
-#define vertexmark(vx)  ((int *) (vx))[m->vertexmarkindex]
+[[gnu::always_inline]] inline int vertexmark(const mesh* m, const vertex& vx)
+{
+  return reinterpret_cast<int*>(vx)[m->vertexmarkindex];
+}
 
-#define setvertexmark(vx, value)                                              \
-  ((int *) (vx))[m->vertexmarkindex] = value
+[[gnu::always_inline]] inline void setvertexmark(const mesh* m, vertex& vx, int value)
+{
+  reinterpret_cast<int*>(vx)[m->vertexmarkindex] = value;
+}
 
-#define vertextype(vx)  ((int *) (vx))[m->vertexmarkindex + 1]
+[[gnu::always_inline]] inline int vertextype(const mesh* m, const vertex& vx)
+{
+  return reinterpret_cast<int*>(vx)[m->vertexmarkindex + 1];
+}
 
-#define setvertextype(vx, value)                                              \
-  ((int *) (vx))[m->vertexmarkindex + 1] = value
+[[gnu::always_inline]] inline void setvertextype(const mesh* m, vertex& vx, int value)
+{
+  reinterpret_cast<int*>(vx)[m->vertexmarkindex + 1] = value;
+}
 
-#define vertex2tri(vx)  ((triangle *) (vx))[m->vertex2triindex]
+[[gnu::always_inline]] inline triangle vertex2tri(const mesh* m, const vertex& vx)
+{
+  return reinterpret_cast<triangle*>(vx)[m->vertex2triindex];
+}
 
-#define setvertex2tri(vx, value)                                              \
-  ((triangle *) (vx))[m->vertex2triindex] = value
+[[gnu::always_inline]] inline void setvertex2tri(const mesh* m, vertex& vx, triangle value)
+{
+  reinterpret_cast<triangle*>(vx)[m->vertex2triindex] = value;
+}
 
 /**                                                                         **/
 /**                                                                         **/
@@ -1367,16 +1511,7 @@ int triunsuitable();
 
 #else /* not EXTERNAL_TEST */
 
-#ifdef ANSI_DECLARATORS
 int triunsuitable(vertex triorg, vertex tridest, vertex triapex, REAL area)
-#else /* not ANSI_DECLARATORS */
-int triunsuitable(triorg, tridest, triapex, area)
-vertex triorg;                              /* The triangle's origin vertex. */
-vertex tridest;                        /* The triangle's destination vertex. */
-vertex triapex;                               /* The triangle's apex vertex. */
-REAL area;                                      /* The area of the triangle. */
-#endif /* not ANSI_DECLARATORS */
-
 {
   REAL dxoa, dxda, dxod;
   REAL dyoa, dyda, dyod;
@@ -1414,42 +1549,24 @@ REAL area;                                      /* The area of the triangle. */
 /**                                                                         **/
 /**                                                                         **/
 
-#ifdef ANSI_DECLARATORS
 void triexit(int status)
-#else /* not ANSI_DECLARATORS */
-void triexit(status)
-int status;
-#endif /* not ANSI_DECLARATORS */
-
 {
   throw std::runtime_error("triexit("+std::to_string(status)+")");
 }
 
-#ifdef ANSI_DECLARATORS
-VOID *trimalloc(int size)
-#else /* not ANSI_DECLARATORS */
-VOID *trimalloc(size)
-int size;
-#endif /* not ANSI_DECLARATORS */
-
+void *trimalloc(int size)
 {
-  VOID *memptr;
+  void *memptr;
 
-  memptr = (VOID *) malloc((unsigned int) size);
-  if (memptr == (VOID *) NULL) {
+  memptr = (void *) malloc((unsigned int) size);
+  if (memptr == nullptr) {
     printf("Error:  Out of memory.\n");
     triexit(1);
   }
   return(memptr);
 }
 
-#ifdef ANSI_DECLARATORS
-void trifree(VOID *memptr)
-#else /* not ANSI_DECLARATORS */
-void trifree(memptr)
-VOID *memptr;
-#endif /* not ANSI_DECLARATORS */
-
+void trifree(void *memptr)
 {
   free(memptr);
 }
@@ -1472,71 +1589,71 @@ VOID *memptr;
 
 void syntax()
 {
+  printf(
 #ifdef CDT_ONLY
 #ifdef REDUCED
-  printf("triangle [-pAcjevngBPNEIOXzo_lQVh] input_file\n");
+  "triangle [-pAcjevngBPNEIOXzo_lQVh] input_file\n"
 #else /* not REDUCED */
-  printf("triangle [-pAcjevngBPNEIOXzo_iFlCQVh] input_file\n");
+  "triangle [-pAcjevngBPNEIOXzo_iFlCQVh] input_file\n"
 #endif /* not REDUCED */
 #else /* not CDT_ONLY */
 #ifdef REDUCED
-  printf("triangle [-prq__a__uAcDjevngBPNEIOXzo_YS__lQVh] input_file\n");
+  "triangle [-prq__a__uAcDjevngBPNEIOXzo_YS__lQVh] input_file\n"
 #else /* not REDUCED */
-  printf("triangle [-prq__a__uAcDjevngBPNEIOXzo_YS__iFlsCQVh] input_file\n");
+  "triangle [-prq__a__uAcDjevngBPNEIOXzo_YS__iFlsCQVh] input_file\n"
 #endif /* not REDUCED */
 #endif /* not CDT_ONLY */
 
-  printf("    -p  Triangulates a Planar Straight Line Graph (.poly file).\n");
+  "    -p  Triangulates a Planar Straight Line Graph (.poly file).\n"
 #ifndef CDT_ONLY
-  printf("    -r  Refines a previously generated mesh.\n");
-  printf(
-    "    -q  Quality mesh generation.  A minimum angle may be specified.\n");
-  printf("    -a  Applies a maximum triangle area constraint.\n");
-  printf("    -u  Applies a user-defined triangle constraint.\n");
+  "    -r  Refines a previously generated mesh.\n"
+  "    -q  Quality mesh generation.  A minimum angle may be specified.\n"
+  "    -a  Applies a maximum triangle area constraint.\n"
+  "    -u  Applies a user-defined triangle constraint.\n"
 #endif /* not CDT_ONLY */
-  printf(
-    "    -A  Applies attributes to identify triangles in certain regions.\n");
-  printf("    -c  Encloses the convex hull with segments.\n");
+  "    -A  Applies attributes to identify triangles in certain regions.\n"
+  "    -c  Encloses the convex hull with segments.\n"
 #ifndef CDT_ONLY
-  printf("    -D  Conforming Delaunay:  all triangles are truly Delaunay.\n");
+  "    -D  Conforming Delaunay:  all triangles are truly Delaunay.\n"
 #endif /* not CDT_ONLY */
 /*
-  printf("    -w  Weighted Delaunay triangulation.\n");
-  printf("    -W  Regular triangulation (lower hull of a height field).\n");
+  "    -w  Weighted Delaunay triangulation.\n"
+  "    -W  Regular triangulation (lower hull of a height field).\n"
 */
-  printf("    -j  Jettison unused vertices from output .node file.\n");
-  printf("    -e  Generates an edge list.\n");
-  printf("    -v  Generates a Voronoi diagram.\n");
-  printf("    -n  Generates a list of triangle neighbors.\n");
-  printf("    -g  Generates an .off file for Geomview.\n");
-  printf("    -B  Suppresses output of boundary information.\n");
-  printf("    -P  Suppresses output of .poly file.\n");
-  printf("    -N  Suppresses output of .node file.\n");
-  printf("    -E  Suppresses output of .ele file.\n");
-  printf("    -I  Suppresses mesh iteration numbers.\n");
-  printf("    -O  Ignores holes in .poly file.\n");
-  printf("    -X  Suppresses use of exact arithmetic.\n");
-  printf("    -z  Numbers all items starting from zero (rather than one).\n");
-  printf("    -o2 Generates second-order subparametric elements.\n");
+  "    -j  Jettison unused vertices from output .node file.\n"
+  "    -e  Generates an edge list.\n"
+  "    -v  Generates a Voronoi diagram.\n"
+  "    -n  Generates a list of triangle neighbors.\n"
+  "    -g  Generates an .off file for Geomview.\n"
+  "    -B  Suppresses output of boundary information.\n"
+  "    -P  Suppresses output of .poly file.\n"
+  "    -N  Suppresses output of .node file.\n"
+  "    -E  Suppresses output of .ele file.\n"
+  "    -I  Suppresses mesh iteration numbers.\n"
+  "    -O  Ignores holes in .poly file.\n"
+  "    -X  Suppresses use of exact arithmetic.\n"
+  "    -z  Numbers all items starting from zero (rather than one).\n"
+  "    -o2 Generates second-order subparametric elements.\n"
 #ifndef CDT_ONLY
-  printf("    -Y  Suppresses boundary segment splitting.\n");
-  printf("    -S  Specifies maximum number of added Steiner points.\n");
+  "    -Y  Suppresses boundary segment splitting.\n"
+  "    -S  Specifies maximum number of added Steiner points.\n"
 #endif /* not CDT_ONLY */
 #ifndef REDUCED
-  printf("    -i  Uses incremental method, rather than divide-and-conquer.\n");
-  printf("    -F  Uses Fortune's sweepline algorithm, rather than d-and-c.\n");
+  "    -i  Uses incremental method, rather than divide-and-conquer.\n"
+  "    -F  Uses Fortune's sweepline algorithm, rather than d-and-c.\n"
 #endif /* not REDUCED */
-  printf("    -l  Uses vertical cuts only, rather than alternating cuts.\n");
+  "    -l  Uses vertical cuts only, rather than alternating cuts.\n"
 #ifndef REDUCED
 #ifndef CDT_ONLY
-  printf(
-    "    -s  Force segments into mesh by splitting (instead of using CDT).\n");
+  "    -s  Force segments into mesh by splitting (instead of using CDT).\n"
 #endif /* not CDT_ONLY */
-  printf("    -C  Check consistency of final mesh.\n");
+  "    -C  Check consistency of final mesh.\n"
 #endif /* not REDUCED */
-  printf("    -Q  Quiet:  No terminal output except errors.\n");
-  printf("    -V  Verbose:  Detailed information on what I'm doing.\n");
-  printf("    -h  Help:  Detailed instructions for Triangle.\n");
+
+  "    -Q  Quiet:  No terminal output except errors.\n"
+  "    -V  Verbose:  Detailed information on what I'm doing.\n"
+  "    -h  Help:  Detailed instructions for Triangle.\n"
+  );
   triexit(0);
 }
 
@@ -1552,1714 +1669,980 @@ void syntax()
 
 void info()
 {
-  printf("Triangle\n");
-  printf(
-"A Two-Dimensional Quality Mesh Generator and Delaunay Triangulator.\n");
-  printf("Version 1.6\n\n");
-  printf(
-"Copyright 1993, 1995, 1997, 1998, 2002, 2005 Jonathan Richard Shewchuk\n");
-  printf("2360 Woolsey #H / Berkeley, California 94705-1927\n");
-  printf("Bugs/comments to jrs@cs.berkeley.edu\n");
-  printf(
-"Created as part of the Quake project (tools for earthquake simulation).\n");
-  printf(
-"Supported in part by NSF Grant CMS-9318163 and an NSERC 1967 Scholarship.\n");
-  printf("There is no warranty whatsoever.  Use at your own risk.\n");
+  printf(R"(Triangle
+A Two-Dimensional Quality Mesh Generator and Delaunay Triangulator.
+Version 1.6
+
+Copyright 1993, 1995, 1997, 1998, 2002, 2005 Jonathan Richard Shewchuk
+2360 Woolsey #H / Berkeley, California 94705-1927
+Bugs/comments to jrs@cs.berkeley.edu
+Created as part of the Quake project (tools for earthquake simulation).
+Supported in part by NSF Grant CMS-9318163 and an NSERC 1967 Scholarship.
+There is no warranty whatsoever.  Use at your own risk
+)");
 #ifdef SINGLE
-  printf("This executable is compiled for single precision arithmetic.\n\n\n");
+  printf("This executable is compiled for single precision arithmetic.\n");
 #else /* not SINGLE */
-  printf("This executable is compiled for double precision arithmetic.\n\n\n");
+  printf("This executable is compiled for double precision arithmetic.\n");
 #endif /* not SINGLE */
-  printf(
-"Triangle generates exact Delaunay triangulations, constrained Delaunay\n");
-  printf(
-"triangulations, conforming Delaunay triangulations, Voronoi diagrams, and\n");
-  printf(
-"high-quality triangular meshes.  The latter can be generated with no small\n"
-);
-  printf(
-"or large angles, and are thus suitable for finite element analysis.  If no\n"
-);
-  printf(
-"command line switch is specified, your .node input file is read, and the\n");
-  printf(
-"Delaunay triangulation is returned in .node and .ele output files.  The\n");
-  printf("command syntax is:\n\n");
-  printf("triangle [-prq__a__uAcDjevngBPNEIOXzo_YS__iFlsCQVh] input_file\n\n");
-  printf(
-"Underscores indicate that numbers may optionally follow certain switches.\n");
-  printf(
-"Do not leave any space between a switch and its numeric parameter.\n");
-  printf(
-"input_file must be a file with extension .node, or extension .poly if the\n");
-  printf(
-"-p switch is used.  If -r is used, you must supply .node and .ele files,\n");
-  printf(
-"and possibly a .poly file and an .area file as well.  The formats of these\n"
-);
-  printf("files are described below.\n\n");
-  printf("Command Line Switches:\n\n");
-  printf(
-"    -p  Reads a Planar Straight Line Graph (.poly file), which can specify\n"
-);
-  printf(
-"        vertices, segments, holes, regional attributes, and regional area\n");
-  printf(
-"        constraints.  Generates a constrained Delaunay triangulation (CDT)\n"
-);
-  printf(
-"        fitting the input; or, if -s, -q, -a, or -u is used, a conforming\n");
-  printf(
-"        constrained Delaunay triangulation (CCDT).  If you want a truly\n");
-  printf(
-"        Delaunay (not just constrained Delaunay) triangulation, use -D as\n");
-  printf(
-"        well.  When -p is not used, Triangle reads a .node file by default.\n"
-);
-  printf(
-"    -r  Refines a previously generated mesh.  The mesh is read from a .node\n"
-);
-  printf(
-"        file and an .ele file.  If -p is also used, a .poly file is read\n");
-  printf(
-"        and used to constrain segments in the mesh.  If -a is also used\n");
-  printf(
-"        (with no number following), an .area file is read and used to\n");
-  printf(
-"        impose area constraints on the mesh.  Further details on refinement\n"
-);
-  printf("        appear below.\n");
-  printf(
-"    -q  Quality mesh generation by Delaunay refinement (a hybrid of Paul\n");
-  printf(
-"        Chew's and Jim Ruppert's algorithms).  Adds vertices to the mesh to\n"
-);
-  printf(
-"        ensure that all angles are between 20 and 140 degrees.  An\n");
-  printf(
-"        alternative bound on the minimum angle, replacing 20 degrees, may\n");
-  printf(
-"        be specified after the `q'.  The specified angle may include a\n");
-  printf(
-"        decimal point, but not exponential notation.  Note that a bound of\n"
-);
-  printf(
-"        theta degrees on the smallest angle also implies a bound of\n");
-  printf(
-"        (180 - 2 theta) on the largest angle.  If the minimum angle is 28.6\n"
-);
-  printf(
-"        degrees or smaller, Triangle is mathematically guaranteed to\n");
-  printf(
-"        terminate (assuming infinite precision arithmetic--Triangle may\n");
-  printf(
-"        fail to terminate if you run out of precision).  In practice,\n");
-  printf(
-"        Triangle often succeeds for minimum angles up to 34 degrees.  For\n");
-  printf(
-"        some meshes, however, you might need to reduce the minimum angle to\n"
-);
-  printf(
-"        avoid problems associated with insufficient floating-point\n");
-  printf("        precision.\n");
-  printf(
-"    -a  Imposes a maximum triangle area.  If a number follows the `a', no\n");
-  printf(
-"        triangle is generated whose area is larger than that number.  If no\n"
-);
-  printf(
-"        number is specified, an .area file (if -r is used) or .poly file\n");
-  printf(
-"        (if -r is not used) specifies a set of maximum area constraints.\n");
-  printf(
-"        An .area file contains a separate area constraint for each\n");
-  printf(
-"        triangle, and is useful for refining a finite element mesh based on\n"
-);
-  printf(
-"        a posteriori error estimates.  A .poly file can optionally contain\n"
-);
-  printf(
-"        an area constraint for each segment-bounded region, thereby\n");
-  printf(
-"        controlling triangle densities in a first triangulation of a PSLG.\n"
-);
-  printf(
-"        You can impose both a fixed area constraint and a varying area\n");
-  printf(
-"        constraint by invoking the -a switch twice, once with and once\n");
-  printf(
-"        without a number following.  Each area specified may include a\n");
-  printf("        decimal point.\n");
-  printf(
-"    -u  Imposes a user-defined constraint on triangle size.  There are two\n"
-);
-  printf(
-"        ways to use this feature.  One is to edit the triunsuitable()\n");
-  printf(
-"        procedure in triangle.c to encode any constraint you like, then\n");
-  printf(
-"        recompile Triangle.  The other is to compile triangle.c with the\n");
-  printf(
-"        EXTERNAL_TEST symbol set (compiler switch -DEXTERNAL_TEST), then\n");
-  printf(
-"        link Triangle with a separate object file that implements\n");
-  printf(
-"        triunsuitable().  In either case, the -u switch causes the user-\n");
-  printf("        defined test to be applied to every triangle.\n");
-  printf(
-"    -A  Assigns an additional floating-point attribute to each triangle\n");
-  printf(
-"        that identifies what segment-bounded region each triangle belongs\n");
-  printf(
-"        to.  Attributes are assigned to regions by the .poly file.  If a\n");
-  printf(
-"        region is not explicitly marked by the .poly file, triangles in\n");
-  printf(
-"        that region are assigned an attribute of zero.  The -A switch has\n");
-  printf(
-"        an effect only when the -p switch is used and the -r switch is not.\n"
-);
-  printf(
-"    -c  Creates segments on the convex hull of the triangulation.  If you\n");
-  printf(
-"        are triangulating a vertex set, this switch causes a .poly file to\n"
-);
-  printf(
-"        be written, containing all edges of the convex hull.  If you are\n");
-  printf(
-"        triangulating a PSLG, this switch specifies that the whole convex\n");
-  printf(
-"        hull of the PSLG should be triangulated, regardless of what\n");
-  printf(
-"        segments the PSLG has.  If you do not use this switch when\n");
-  printf(
-"        triangulating a PSLG, Triangle assumes that you have identified the\n"
-);
-  printf(
-"        region to be triangulated by surrounding it with segments of the\n");
-  printf(
-"        input PSLG.  Beware:  if you are not careful, this switch can cause\n"
-);
-  printf(
-"        the introduction of an extremely thin angle between a PSLG segment\n"
-);
-  printf(
-"        and a convex hull segment, which can cause overrefinement (and\n");
-  printf(
-"        possibly failure if Triangle runs out of precision).  If you are\n");
-  printf(
-"        refining a mesh, the -c switch works differently:  it causes a\n");
-  printf(
-"        .poly file to be written containing the boundary edges of the mesh\n"
-);
-  printf("        (useful if no .poly file was read).\n");
-  printf(
-"    -D  Conforming Delaunay triangulation:  use this switch if you want to\n"
-);
-  printf(
-"        ensure that all the triangles in the mesh are Delaunay, and not\n");
-  printf(
-"        merely constrained Delaunay; or if you want to ensure that all the\n"
-);
-  printf(
-"        Voronoi vertices lie within the triangulation.  (Some finite volume\n"
-);
-  printf(
-"        methods have this requirement.)  This switch invokes Ruppert's\n");
-  printf(
-"        original algorithm, which splits every subsegment whose diametral\n");
-  printf(
-"        circle is encroached.  It usually increases the number of vertices\n"
-);
-  printf("        and triangles.\n");
-  printf(
-"    -j  Jettisons vertices that are not part of the final triangulation\n");
-  printf(
-"        from the output .node file.  By default, Triangle copies all\n");
-  printf(
-"        vertices in the input .node file to the output .node file, in the\n");
-  printf(
-"        same order, so their indices do not change.  The -j switch prevents\n"
-);
-  printf(
-"        duplicated input vertices, or vertices `eaten' by holes, from\n");
-  printf(
-"        appearing in the output .node file.  Thus, if two input vertices\n");
-  printf(
-"        have exactly the same coordinates, only the first appears in the\n");
-  printf(
-"        output.  If any vertices are jettisoned, the vertex numbering in\n");
-  printf(
-"        the output .node file differs from that of the input .node file.\n");
-  printf(
-"    -e  Outputs (to an .edge file) a list of edges of the triangulation.\n");
-  printf(
-"    -v  Outputs the Voronoi diagram associated with the triangulation.\n");
-  printf(
-"        Does not attempt to detect degeneracies, so some Voronoi vertices\n");
-  printf(
-"        may be duplicated.  See the discussion of Voronoi diagrams below.\n");
-  printf(
-"    -n  Outputs (to a .neigh file) a list of triangles neighboring each\n");
-  printf("        triangle.\n");
-  printf(
-"    -g  Outputs the mesh to an Object File Format (.off) file, suitable for\n"
-);
-  printf("        viewing with the Geometry Center's Geomview package.\n");
-  printf(
-"    -B  No boundary markers in the output .node, .poly, and .edge output\n");
-  printf(
-"        files.  See the detailed discussion of boundary markers below.\n");
-  printf(
-"    -P  No output .poly file.  Saves disk space, but you lose the ability\n");
-  printf(
-"        to maintain constraining segments on later refinements of the mesh.\n"
-);
-  printf("    -N  No output .node file.\n");
-  printf("    -E  No output .ele file.\n");
-  printf(
-"    -I  No iteration numbers.  Suppresses the output of .node and .poly\n");
-  printf(
-"        files, so your input files won't be overwritten.  (If your input is\n"
-);
-  printf(
-"        a .poly file only, a .node file is written.)  Cannot be used with\n");
-  printf(
-"        the -r switch, because that would overwrite your input .ele file.\n");
-  printf(
-"        Shouldn't be used with the -q, -a, -u, or -s switch if you are\n");
-  printf(
-"        using a .node file for input, because no .node file is written, so\n"
-);
-  printf("        there is no record of any added Steiner points.\n");
-  printf("    -O  No holes.  Ignores the holes in the .poly file.\n");
-  printf(
-"    -X  No exact arithmetic.  Normally, Triangle uses exact floating-point\n"
-);
-  printf(
-"        arithmetic for certain tests if it thinks the inexact tests are not\n"
-);
-  printf(
-"        accurate enough.  Exact arithmetic ensures the robustness of the\n");
-  printf(
-"        triangulation algorithms, despite floating-point roundoff error.\n");
-  printf(
-"        Disabling exact arithmetic with the -X switch causes a small\n");
-  printf(
-"        improvement in speed and creates the possibility that Triangle will\n"
-);
-  printf("        fail to produce a valid mesh.  Not recommended.\n");
-  printf(
-"    -z  Numbers all items starting from zero (rather than one).  Note that\n"
-);
-  printf(
-"        this switch is normally overridden by the value used to number the\n"
-);
-  printf(
-"        first vertex of the input .node or .poly file.  However, this\n");
-  printf(
-"        switch is useful when calling Triangle from another program.\n");
-  printf(
-"    -o2 Generates second-order subparametric elements with six nodes each.\n"
-);
-  printf(
-"    -Y  No new vertices on the boundary.  This switch is useful when the\n");
-  printf(
-"        mesh boundary must be preserved so that it conforms to some\n");
-  printf(
-"        adjacent mesh.  Be forewarned that you will probably sacrifice much\n"
-);
-  printf(
-"        of the quality of the mesh; Triangle will try, but the resulting\n");
-  printf(
-"        mesh may contain poorly shaped triangles.  Works well if all the\n");
-  printf(
-"        boundary vertices are closely spaced.  Specify this switch twice\n");
-  printf(
-"        (`-YY') to prevent all segment splitting, including internal\n");
-  printf("        boundaries.\n");
-  printf(
-"    -S  Specifies the maximum number of Steiner points (vertices that are\n");
-  printf(
-"        not in the input, but are added to meet the constraints on minimum\n"
-);
-  printf(
-"        angle and maximum area).  The default is to allow an unlimited\n");
-  printf(
-"        number.  If you specify this switch with no number after it,\n");
-  printf(
-"        the limit is set to zero.  Triangle always adds vertices at segment\n"
-);
-  printf(
-"        intersections, even if it needs to use more vertices than the limit\n"
-);
-  printf(
-"        you set.  When Triangle inserts segments by splitting (-s), it\n");
-  printf(
-"        always adds enough vertices to ensure that all the segments of the\n"
-);
-  printf("        PLSG are recovered, ignoring the limit if necessary.\n");
-  printf(
-"    -i  Uses an incremental rather than a divide-and-conquer algorithm to\n");
-  printf(
-"        construct a Delaunay triangulation.  Try it if the divide-and-\n");
-  printf("        conquer algorithm fails.\n");
-  printf(
-"    -F  Uses Steven Fortune's sweepline algorithm to construct a Delaunay\n");
-  printf(
-"        triangulation.  Warning:  does not use exact arithmetic for all\n");
-  printf("        calculations.  An exact result is not guaranteed.\n");
-  printf(
-"    -l  Uses only vertical cuts in the divide-and-conquer algorithm.  By\n");
-  printf(
-"        default, Triangle alternates between vertical and horizontal cuts,\n"
-);
-  printf(
-"        which usually improve the speed except with vertex sets that are\n");
-  printf(
-"        small or short and wide.  This switch is primarily of theoretical\n");
-  printf("        interest.\n");
-  printf(
-"    -s  Specifies that segments should be forced into the triangulation by\n"
-);
-  printf(
-"        recursively splitting them at their midpoints, rather than by\n");
-  printf(
-"        generating a constrained Delaunay triangulation.  Segment splitting\n"
-);
-  printf(
-"        is true to Ruppert's original algorithm, but can create needlessly\n"
-);
-  printf(
-"        small triangles.  This switch is primarily of theoretical interest.\n"
-);
-  printf(
-"    -C  Check the consistency of the final mesh.  Uses exact arithmetic for\n"
-);
-  printf(
-"        checking, even if the -X switch is used.  Useful if you suspect\n");
-  printf("        Triangle is buggy.\n");
-  printf(
-"    -Q  Quiet:  Suppresses all explanation of what Triangle is doing,\n");
-  printf("        unless an error occurs.\n");
-  printf(
-"    -V  Verbose:  Gives detailed information about what Triangle is doing.\n"
-);
-  printf(
-"        Add more `V's for increasing amount of detail.  `-V' is most\n");
-  printf(
-"        useful; itgives information on algorithmic progress and much more\n");
-  printf(
-"        detailed statistics.  `-VV' gives vertex-by-vertex details, and\n");
-  printf(
-"        prints so much that Triangle runs much more slowly.  `-VVVV' gives\n"
-);
-  printf("        information only a debugger could love.\n");
-  printf("    -h  Help:  Displays these instructions.\n");
-  printf("\n");
-  printf("Definitions:\n");
-  printf("\n");
-  printf(
-"  A Delaunay triangulation of a vertex set is a triangulation whose\n");
-  printf(
-"  vertices are the vertex set, that covers the convex hull of the vertex\n");
-  printf(
-"  set.  A Delaunay triangulation has the property that no vertex lies\n");
-  printf(
-"  inside the circumscribing circle (circle that passes through all three\n");
-  printf("  vertices) of any triangle in the triangulation.\n\n");
-  printf(
-"  A Voronoi diagram of a vertex set is a subdivision of the plane into\n");
-  printf(
-"  polygonal cells (some of which may be unbounded, meaning infinitely\n");
-  printf(
-"  large), where each cell is the set of points in the plane that are closer\n"
-);
-  printf(
-"  to some input vertex than to any other input vertex.  The Voronoi diagram\n"
-);
-  printf("  is a geometric dual of the Delaunay triangulation.\n\n");
-  printf(
-"  A Planar Straight Line Graph (PSLG) is a set of vertices and segments.\n");
-  printf(
-"  Segments are simply edges, whose endpoints are all vertices in the PSLG.\n"
-);
-  printf(
-"  Segments may intersect each other only at their endpoints.  The file\n");
-  printf("  format for PSLGs (.poly files) is described below.\n\n");
-  printf(
-"  A constrained Delaunay triangulation (CDT) of a PSLG is similar to a\n");
-  printf(
-"  Delaunay triangulation, but each PSLG segment is present as a single edge\n"
-);
-  printf(
-"  of the CDT.  (A constrained Delaunay triangulation is not truly a\n");
-  printf(
-"  Delaunay triangulation, because some of its triangles might not be\n");
-  printf(
-"  Delaunay.)  By definition, a CDT does not have any vertices other than\n");
-  printf(
-"  those specified in the input PSLG.  Depending on context, a CDT might\n");
-  printf(
-"  cover the convex hull of the PSLG, or it might cover only a segment-\n");
-  printf("  bounded region (e.g. a polygon).\n\n");
-  printf(
-"  A conforming Delaunay triangulation of a PSLG is a triangulation in which\n"
-);
-  printf(
-"  each triangle is truly Delaunay, and each PSLG segment is represented by\n"
-);
-  printf(
-"  a linear contiguous sequence of edges of the triangulation.  New vertices\n"
-);
-  printf(
-"  (not part of the PSLG) may appear, and each input segment may have been\n");
-  printf(
-"  subdivided into shorter edges (subsegments) by these additional vertices.\n"
-);
-  printf(
-"  The new vertices are frequently necessary to maintain the Delaunay\n");
-  printf("  property while ensuring that every segment is represented.\n\n");
-  printf(
-"  A conforming constrained Delaunay triangulation (CCDT) of a PSLG is a\n");
-  printf(
-"  triangulation of a PSLG whose triangles are constrained Delaunay.  New\n");
-  printf("  vertices may appear, and input segments may be subdivided into\n");
-  printf(
-"  subsegments, but not to guarantee that segments are respected; rather, to\n"
-);
-  printf(
-"  improve the quality of the triangles.  The high-quality meshes produced\n");
-  printf(
-"  by the -q switch are usually CCDTs, but can be made conforming Delaunay\n");
-  printf("  with the -D switch.\n\n");
-  printf("File Formats:\n\n");
-  printf(
-"  All files may contain comments prefixed by the character '#'.  Vertices,\n"
-);
-  printf(
-"  triangles, edges, holes, and maximum area constraints must be numbered\n");
-  printf(
-"  consecutively, starting from either 1 or 0.  Whichever you choose, all\n");
-  printf(
-"  input files must be consistent; if the vertices are numbered from 1, so\n");
-  printf(
-"  must be all other objects.  Triangle automatically detects your choice\n");
-  printf(
-"  while reading the .node (or .poly) file.  (When calling Triangle from\n");
-  printf(
-"  another program, use the -z switch if you wish to number objects from\n");
-  printf("  zero.)  Examples of these file formats are given below.\n\n");
-  printf("  .node files:\n");
-  printf(
-"    First line:  <# of vertices> <dimension (must be 2)> <# of attributes>\n"
-);
-  printf(
-"                                           <# of boundary markers (0 or 1)>\n"
-);
-  printf(
-"    Remaining lines:  <vertex #> <x> <y> [attributes] [boundary marker]\n");
-  printf("\n");
-  printf(
-"    The attributes, which are typically floating-point values of physical\n");
-  printf(
-"    quantities (such as mass or conductivity) associated with the nodes of\n"
-);
-  printf(
-"    a finite element mesh, are copied unchanged to the output mesh.  If -q,\n"
-);
-  printf(
-"    -a, -u, -D, or -s is selected, each new Steiner point added to the mesh\n"
-);
-  printf("    has attributes assigned to it by linear interpolation.\n\n");
-  printf(
-"    If the fourth entry of the first line is `1', the last column of the\n");
-  printf(
-"    remainder of the file is assumed to contain boundary markers.  Boundary\n"
-);
-  printf(
-"    markers are used to identify boundary vertices and vertices resting on\n"
-);
-  printf(
-"    PSLG segments; a complete description appears in a section below.  The\n"
-);
-  printf(
-"    .node file produced by Triangle contains boundary markers in the last\n");
-  printf("    column unless they are suppressed by the -B switch.\n\n");
-  printf("  .ele files:\n");
-  printf(
-"    First line:  <# of triangles> <nodes per triangle> <# of attributes>\n");
-  printf(
-"    Remaining lines:  <triangle #> <node> <node> <node> ... [attributes]\n");
-  printf("\n");
-  printf(
-"    Nodes are indices into the corresponding .node file.  The first three\n");
-  printf(
-"    nodes are the corner vertices, and are listed in counterclockwise order\n"
-);
-  printf(
-"    around each triangle.  (The remaining nodes, if any, depend on the type\n"
-);
-  printf("    of finite element used.)\n\n");
-  printf(
-"    The attributes are just like those of .node files.  Because there is no\n"
-);
-  printf(
-"    simple mapping from input to output triangles, Triangle attempts to\n");
-  printf(
-"    interpolate attributes, and may cause a lot of diffusion of attributes\n"
-);
-  printf(
-"    among nearby triangles as the triangulation is refined.  Attributes do\n"
-);
-  printf("    not diffuse across segments, so attributes used to identify\n");
-  printf("    segment-bounded regions remain intact.\n\n");
-  printf(
-"    In .ele files produced by Triangle, each triangular element has three\n");
-  printf(
-"    nodes (vertices) unless the -o2 switch is used, in which case\n");
-  printf(
-"    subparametric quadratic elements with six nodes each are generated.\n");
-  printf(
-"    The first three nodes are the corners in counterclockwise order, and\n");
-  printf(
-"    the fourth, fifth, and sixth nodes lie on the midpoints of the edges\n");
-  printf(
-"    opposite the first, second, and third vertices, respectively.\n");
-  printf("\n");
-  printf("  .poly files:\n");
-  printf(
-"    First line:  <# of vertices> <dimension (must be 2)> <# of attributes>\n"
-);
-  printf(
-"                                           <# of boundary markers (0 or 1)>\n"
-);
-  printf(
-"    Following lines:  <vertex #> <x> <y> [attributes] [boundary marker]\n");
-  printf("    One line:  <# of segments> <# of boundary markers (0 or 1)>\n");
-  printf(
-"    Following lines:  <segment #> <endpoint> <endpoint> [boundary marker]\n");
-  printf("    One line:  <# of holes>\n");
-  printf("    Following lines:  <hole #> <x> <y>\n");
-  printf(
-"    Optional line:  <# of regional attributes and/or area constraints>\n");
-  printf(
-"    Optional following lines:  <region #> <x> <y> <attribute> <max area>\n");
-  printf("\n");
-  printf(
-"    A .poly file represents a PSLG, as well as some additional information.\n"
-);
-  printf(
-"    The first section lists all the vertices, and is identical to the\n");
-  printf(
-"    format of .node files.  <# of vertices> may be set to zero to indicate\n"
-);
-  printf(
-"    that the vertices are listed in a separate .node file; .poly files\n");
-  printf(
-"    produced by Triangle always have this format.  A vertex set represented\n"
-);
-  printf(
-"    this way has the advantage that it may easily be triangulated with or\n");
-  printf(
-"    without segments (depending on whether the -p switch is invoked).\n");
-  printf("\n");
-  printf(
-"    The second section lists the segments.  Segments are edges whose\n");
-  printf(
-"    presence in the triangulation is enforced.  (Depending on the choice of\n"
-);
-  printf(
-"    switches, segment might be subdivided into smaller edges).  Each\n");
-  printf(
-"    segment is specified by listing the indices of its two endpoints.  This\n"
-);
-  printf(
-"    means that you must include its endpoints in the vertex list.  Each\n");
-  printf("    segment, like each point, may have a boundary marker.\n\n");
-  printf(
-"    If -q, -a, -u, and -s are not selected, Triangle produces a constrained\n"
-);
-  printf(
-"    Delaunay triangulation (CDT), in which each segment appears as a single\n"
-);
-  printf(
-"    edge in the triangulation.  If -q, -a, -u, or -s is selected, Triangle\n"
-);
-  printf(
-"    produces a conforming constrained Delaunay triangulation (CCDT), in\n");
-  printf(
-"    which segments may be subdivided into smaller edges.  If -D is\n");
-  printf(
-"    selected, Triangle produces a conforming Delaunay triangulation, so\n");
-  printf(
-"    that every triangle is Delaunay, and not just constrained Delaunay.\n");
-  printf("\n");
-  printf(
-"    The third section lists holes (and concavities, if -c is selected) in\n");
-  printf(
-"    the triangulation.  Holes are specified by identifying a point inside\n");
-  printf(
-"    each hole.  After the triangulation is formed, Triangle creates holes\n");
-  printf(
-"    by eating triangles, spreading out from each hole point until its\n");
-  printf(
-"    progress is blocked by segments in the PSLG.  You must be careful to\n");
-  printf(
-"    enclose each hole in segments, or your whole triangulation might be\n");
-  printf(
-"    eaten away.  If the two triangles abutting a segment are eaten, the\n");
-  printf(
-"    segment itself is also eaten.  Do not place a hole directly on a\n");
-  printf("    segment; if you do, Triangle chooses one side of the segment\n");
-  printf("    arbitrarily.\n\n");
-  printf(
-"    The optional fourth section lists regional attributes (to be assigned\n");
-  printf(
-"    to all triangles in a region) and regional constraints on the maximum\n");
-  printf(
-"    triangle area.  Triangle reads this section only if the -A switch is\n");
-  printf(
-"    used or the -a switch is used without a number following it, and the -r\n"
-);
-  printf(
-"    switch is not used.  Regional attributes and area constraints are\n");
-  printf(
-"    propagated in the same manner as holes:  you specify a point for each\n");
-  printf(
-"    attribute and/or constraint, and the attribute and/or constraint\n");
-  printf(
-"    affects the whole region (bounded by segments) containing the point.\n");
-  printf(
-"    If two values are written on a line after the x and y coordinate, the\n");
-  printf(
-"    first such value is assumed to be a regional attribute (but is only\n");
-  printf(
-"    applied if the -A switch is selected), and the second value is assumed\n"
-);
-  printf(
-"    to be a regional area constraint (but is only applied if the -a switch\n"
-);
-  printf(
-"    is selected).  You may specify just one value after the coordinates,\n");
-  printf(
-"    which can serve as both an attribute and an area constraint, depending\n"
-);
-  printf(
-"    on the choice of switches.  If you are using the -A and -a switches\n");
-  printf(
-"    simultaneously and wish to assign an attribute to some region without\n");
-  printf("    imposing an area constraint, use a negative maximum area.\n\n");
-  printf(
-"    When a triangulation is created from a .poly file, you must either\n");
-  printf(
-"    enclose the entire region to be triangulated in PSLG segments, or\n");
-  printf(
-"    use the -c switch, which automatically creates extra segments that\n");
-  printf(
-"    enclose the convex hull of the PSLG.  If you do not use the -c switch,\n"
-);
-  printf(
-"    Triangle eats all triangles that are not enclosed by segments; if you\n");
-  printf(
-"    are not careful, your whole triangulation may be eaten away.  If you do\n"
-);
-  printf(
-"    use the -c switch, you can still produce concavities by the appropriate\n"
-);
-  printf(
-"    placement of holes just inside the boundary of the convex hull.\n");
-  printf("\n");
-  printf(
-"    An ideal PSLG has no intersecting segments, nor any vertices that lie\n");
-  printf(
-"    upon segments (except, of course, the endpoints of each segment).  You\n"
-);
-  printf(
-"    aren't required to make your .poly files ideal, but you should be aware\n"
-);
-  printf(
-"    of what can go wrong.  Segment intersections are relatively safe--\n");
-  printf(
-"    Triangle calculates the intersection points for you and adds them to\n");
-  printf(
-"    the triangulation--as long as your machine's floating-point precision\n");
-  printf(
-"    doesn't become a problem.  You are tempting the fates if you have three\n"
-);
-  printf(
-"    segments that cross at the same location, and expect Triangle to figure\n"
-);
-  printf(
-"    out where the intersection point is.  Thanks to floating-point roundoff\n"
-);
-  printf(
-"    error, Triangle will probably decide that the three segments intersect\n"
-);
-  printf(
-"    at three different points, and you will find a minuscule triangle in\n");
-  printf(
-"    your output--unless Triangle tries to refine the tiny triangle, uses\n");
-  printf(
-"    up the last bit of machine precision, and fails to terminate at all.\n");
-  printf(
-"    You're better off putting the intersection point in the input files,\n");
-  printf(
-"    and manually breaking up each segment into two.  Similarly, if you\n");
-  printf(
-"    place a vertex at the middle of a segment, and hope that Triangle will\n"
-);
-  printf(
-"    break up the segment at that vertex, you might get lucky.  On the other\n"
-);
-  printf(
-"    hand, Triangle might decide that the vertex doesn't lie precisely on\n");
-  printf(
-"    the segment, and you'll have a needle-sharp triangle in your output--or\n"
-);
-  printf("    a lot of tiny triangles if you're generating a quality mesh.\n");
-  printf("\n");
-  printf(
-"    When Triangle reads a .poly file, it also writes a .poly file, which\n");
-  printf(
-"    includes all the subsegments--the edges that are parts of input\n");
-  printf(
-"    segments.  If the -c switch is used, the output .poly file also\n");
-  printf(
-"    includes all of the edges on the convex hull.  Hence, the output .poly\n"
-);
-  printf(
-"    file is useful for finding edges associated with input segments and for\n"
-);
-  printf(
-"    setting boundary conditions in finite element simulations.  Moreover,\n");
-  printf(
-"    you will need the output .poly file if you plan to refine the output\n");
-  printf(
-"    mesh, and don't want segments to be missing in later triangulations.\n");
-  printf("\n");
-  printf("  .area files:\n");
-  printf("    First line:  <# of triangles>\n");
-  printf("    Following lines:  <triangle #> <maximum area>\n");
-  printf("\n");
-  printf(
-"    An .area file associates with each triangle a maximum area that is used\n"
-);
-  printf(
-"    for mesh refinement.  As with other file formats, every triangle must\n");
-  printf(
-"    be represented, and the triangles must be numbered consecutively.  A\n");
-  printf(
-"    triangle may be left unconstrained by assigning it a negative maximum\n");
-  printf("    area.\n\n");
-  printf("  .edge files:\n");
-  printf("    First line:  <# of edges> <# of boundary markers (0 or 1)>\n");
-  printf(
-"    Following lines:  <edge #> <endpoint> <endpoint> [boundary marker]\n");
-  printf("\n");
-  printf(
-"    Endpoints are indices into the corresponding .node file.  Triangle can\n"
-);
-  printf(
-"    produce .edge files (use the -e switch), but cannot read them.  The\n");
-  printf(
-"    optional column of boundary markers is suppressed by the -B switch.\n");
-  printf("\n");
-  printf(
-"    In Voronoi diagrams, one also finds a special kind of edge that is an\n");
-  printf(
-"    infinite ray with only one endpoint.  For these edges, a different\n");
-  printf("    format is used:\n\n");
-  printf("        <edge #> <endpoint> -1 <direction x> <direction y>\n\n");
-  printf(
-"    The `direction' is a floating-point vector that indicates the direction\n"
-);
-  printf("    of the infinite ray.\n\n");
-  printf("  .neigh files:\n");
-  printf(
-"    First line:  <# of triangles> <# of neighbors per triangle (always 3)>\n"
-);
-  printf(
-"    Following lines:  <triangle #> <neighbor> <neighbor> <neighbor>\n");
-  printf("\n");
-  printf(
-"    Neighbors are indices into the corresponding .ele file.  An index of -1\n"
-);
-  printf(
-"    indicates no neighbor (because the triangle is on an exterior\n");
-  printf(
-"    boundary).  The first neighbor of triangle i is opposite the first\n");
-  printf("    corner of triangle i, and so on.\n\n");
-  printf(
-"    Triangle can produce .neigh files (use the -n switch), but cannot read\n"
-);
-  printf("    them.\n\n");
-  printf("Boundary Markers:\n\n");
-  printf(
-"  Boundary markers are tags used mainly to identify which output vertices\n");
-  printf(
-"  and edges are associated with which PSLG segment, and to identify which\n");
-  printf(
-"  vertices and edges occur on a boundary of the triangulation.  A common\n");
-  printf(
-"  use is to determine where boundary conditions should be applied to a\n");
-  printf(
-"  finite element mesh.  You can prevent boundary markers from being written\n"
-);
-  printf("  into files produced by Triangle by using the -B switch.\n\n");
-  printf(
-"  The boundary marker associated with each segment in an output .poly file\n"
-);
-  printf("  and each edge in an output .edge file is chosen as follows:\n");
-  printf(
-"    - If an output edge is part or all of a PSLG segment with a nonzero\n");
-  printf(
-"      boundary marker, then the edge is assigned the same marker.\n");
-  printf(
-"    - Otherwise, if the edge lies on a boundary of the triangulation\n");
-  printf(
-"      (even the boundary of a hole), then the edge is assigned the marker\n");
-  printf("      one (1).\n");
-  printf("    - Otherwise, the edge is assigned the marker zero (0).\n");
-  printf(
-"  The boundary marker associated with each vertex in an output .node file\n");
-  printf("  is chosen as follows:\n");
-  printf(
-"    - If a vertex is assigned a nonzero boundary marker in the input file,\n"
-);
-  printf(
-"      then it is assigned the same marker in the output .node file.\n");
-  printf(
-"    - Otherwise, if the vertex lies on a PSLG segment (even if it is an\n");
-  printf(
-"      endpoint of the segment) with a nonzero boundary marker, then the\n");
-  printf(
-"      vertex is assigned the same marker.  If the vertex lies on several\n");
-  printf("      such segments, one of the markers is chosen arbitrarily.\n");
-  printf(
-"    - Otherwise, if the vertex occurs on a boundary of the triangulation,\n");
-  printf("      then the vertex is assigned the marker one (1).\n");
-  printf("    - Otherwise, the vertex is assigned the marker zero (0).\n");
-  printf("\n");
-  printf(
-"  If you want Triangle to determine for you which vertices and edges are on\n"
-);
-  printf(
-"  the boundary, assign them the boundary marker zero (or use no markers at\n"
-);
-  printf(
-"  all) in your input files.  In the output files, all boundary vertices,\n");
-  printf("  edges, and segments will be assigned the value one.\n\n");
-  printf("Triangulation Iteration Numbers:\n\n");
-  printf(
-"  Because Triangle can read and refine its own triangulations, input\n");
-  printf(
-"  and output files have iteration numbers.  For instance, Triangle might\n");
-  printf(
-"  read the files mesh.3.node, mesh.3.ele, and mesh.3.poly, refine the\n");
-  printf(
-"  triangulation, and output the files mesh.4.node, mesh.4.ele, and\n");
-  printf("  mesh.4.poly.  Files with no iteration number are treated as if\n");
-  printf(
-"  their iteration number is zero; hence, Triangle might read the file\n");
-  printf(
-"  points.node, triangulate it, and produce the files points.1.node and\n");
-  printf("  points.1.ele.\n\n");
-  printf(
-"  Iteration numbers allow you to create a sequence of successively finer\n");
-  printf(
-"  meshes suitable for multigrid methods.  They also allow you to produce a\n"
-);
-  printf(
-"  sequence of meshes using error estimate-driven mesh refinement.\n");
-  printf("\n");
-  printf(
-"  If you're not using refinement or quality meshing, and you don't like\n");
-  printf(
-"  iteration numbers, use the -I switch to disable them.  This switch also\n");
-  printf(
-"  disables output of .node and .poly files to prevent your input files from\n"
-);
-  printf(
-"  being overwritten.  (If the input is a .poly file that contains its own\n");
-  printf(
-"  points, a .node file is written.  This can be quite convenient for\n");
-  printf("  computing CDTs or quality meshes.)\n\n");
-  printf("Examples of How to Use Triangle:\n\n");
-  printf(
-"  `triangle dots' reads vertices from dots.node, and writes their Delaunay\n"
-);
-  printf(
-"  triangulation to dots.1.node and dots.1.ele.  (dots.1.node is identical\n");
-  printf(
-"  to dots.node.)  `triangle -I dots' writes the triangulation to dots.ele\n");
-  printf(
-"  instead.  (No additional .node file is needed, so none is written.)\n");
-  printf("\n");
-  printf(
-"  `triangle -pe object.1' reads a PSLG from object.1.poly (and possibly\n");
-  printf(
-"  object.1.node, if the vertices are omitted from object.1.poly) and writes\n"
-);
-  printf(
-"  its constrained Delaunay triangulation to object.2.node and object.2.ele.\n"
-);
-  printf(
-"  The segments are copied to object.2.poly, and all edges are written to\n");
-  printf("  object.2.edge.\n\n");
-  printf(
-"  `triangle -pq31.5a.1 object' reads a PSLG from object.poly (and possibly\n"
-);
-  printf(
-"  object.node), generates a mesh whose angles are all between 31.5 and 117\n"
-);
-  printf(
-"  degrees and whose triangles all have areas of 0.1 or less, and writes the\n"
-);
-  printf(
-"  mesh to object.1.node and object.1.ele.  Each segment may be broken up\n");
-  printf("  into multiple subsegments; these are written to object.1.poly.\n");
-  printf("\n");
-  printf(
-"  Here is a sample file `box.poly' describing a square with a square hole:\n"
-);
-  printf("\n");
-  printf(
-"    # A box with eight vertices in 2D, no attributes, one boundary marker.\n"
-);
-  printf("    8 2 0 1\n");
-  printf("     # Outer box has these vertices:\n");
-  printf("     1   0 0   0\n");
-  printf("     2   0 3   0\n");
-  printf("     3   3 0   0\n");
-  printf("     4   3 3   33     # A special marker for this vertex.\n");
-  printf("     # Inner square has these vertices:\n");
-  printf("     5   1 1   0\n");
-  printf("     6   1 2   0\n");
-  printf("     7   2 1   0\n");
-  printf("     8   2 2   0\n");
-  printf("    # Five segments with boundary markers.\n");
-  printf("    5 1\n");
-  printf("     1   1 2   5      # Left side of outer box.\n");
-  printf("     # Square hole has these segments:\n");
-  printf("     2   5 7   0\n");
-  printf("     3   7 8   0\n");
-  printf("     4   8 6   10\n");
-  printf("     5   6 5   0\n");
-  printf("    # One hole in the middle of the inner square.\n");
-  printf("    1\n");
-  printf("     1   1.5 1.5\n");
-  printf("\n");
-  printf(
-"  Note that some segments are missing from the outer square, so you must\n");
-  printf(
-"  use the `-c' switch.  After `triangle -pqc box.poly', here is the output\n"
-);
-  printf(
-"  file `box.1.node', with twelve vertices.  The last four vertices were\n");
-  printf(
-"  added to meet the angle constraint.  Vertices 1, 2, and 9 have markers\n");
-  printf(
-"  from segment 1.  Vertices 6 and 8 have markers from segment 4.  All the\n");
-  printf(
-"  other vertices but 4 have been marked to indicate that they lie on a\n");
-  printf("  boundary.\n\n");
-  printf("    12  2  0  1\n");
-  printf("       1    0   0      5\n");
-  printf("       2    0   3      5\n");
-  printf("       3    3   0      1\n");
-  printf("       4    3   3     33\n");
-  printf("       5    1   1      1\n");
-  printf("       6    1   2     10\n");
-  printf("       7    2   1      1\n");
-  printf("       8    2   2     10\n");
-  printf("       9    0   1.5    5\n");
-  printf("      10    1.5   0    1\n");
-  printf("      11    3   1.5    1\n");
-  printf("      12    1.5   3    1\n");
-  printf("    # Generated by triangle -pqc box.poly\n");
-  printf("\n");
-  printf("  Here is the output file `box.1.ele', with twelve triangles.\n");
-  printf("\n");
-  printf("    12  3  0\n");
-  printf("       1     5   6   9\n");
-  printf("       2    10   3   7\n");
-  printf("       3     6   8  12\n");
-  printf("       4     9   1   5\n");
-  printf("       5     6   2   9\n");
-  printf("       6     7   3  11\n");
-  printf("       7    11   4   8\n");
-  printf("       8     7   5  10\n");
-  printf("       9    12   2   6\n");
-  printf("      10     8   7  11\n");
-  printf("      11     5   1  10\n");
-  printf("      12     8   4  12\n");
-  printf("    # Generated by triangle -pqc box.poly\n\n");
-  printf(
-"  Here is the output file `box.1.poly'.  Note that segments have been added\n"
-);
-  printf(
-"  to represent the convex hull, and some segments have been subdivided by\n");
-  printf(
-"  newly added vertices.  Note also that <# of vertices> is set to zero to\n");
-  printf("  indicate that the vertices should be read from the .node file.\n");
-  printf("\n");
-  printf("    0  2  0  1\n");
-  printf("    12  1\n");
-  printf("       1     1   9     5\n");
-  printf("       2     5   7     1\n");
-  printf("       3     8   7     1\n");
-  printf("       4     6   8    10\n");
-  printf("       5     5   6     1\n");
-  printf("       6     3  10     1\n");
-  printf("       7     4  11     1\n");
-  printf("       8     2  12     1\n");
-  printf("       9     9   2     5\n");
-  printf("      10    10   1     1\n");
-  printf("      11    11   3     1\n");
-  printf("      12    12   4     1\n");
-  printf("    1\n");
-  printf("       1   1.5 1.5\n");
-  printf("    # Generated by triangle -pqc box.poly\n");
-  printf("\n");
-  printf("Refinement and Area Constraints:\n");
-  printf("\n");
-  printf(
-"  The -r switch causes a mesh (.node and .ele files) to be read and\n");
-  printf(
-"  refined.  If the -p switch is also used, a .poly file is read and used to\n"
-);
-  printf(
-"  specify edges that are constrained and cannot be eliminated (although\n");
-  printf(
-"  they can be subdivided into smaller edges) by the refinement process.\n");
-  printf("\n");
-  printf(
-"  When you refine a mesh, you generally want to impose tighter constraints.\n"
-);
-  printf(
-"  One way to accomplish this is to use -q with a larger angle, or -a\n");
-  printf(
-"  followed by a smaller area than you used to generate the mesh you are\n");
-  printf(
-"  refining.  Another way to do this is to create an .area file, which\n");
-  printf(
-"  specifies a maximum area for each triangle, and use the -a switch\n");
-  printf(
-"  (without a number following).  Each triangle's area constraint is applied\n"
-);
-  printf(
-"  to that triangle.  Area constraints tend to diffuse as the mesh is\n");
-  printf(
-"  refined, so if there are large variations in area constraint between\n");
-  printf(
-"  adjacent triangles, you may not get the results you want.  In that case,\n"
-);
-  printf(
-"  consider instead using the -u switch and writing a C procedure that\n");
-  printf("  determines which triangles are too large.\n\n");
-  printf(
-"  If you are refining a mesh composed of linear (three-node) elements, the\n"
-);
-  printf(
-"  output mesh contains all the nodes present in the input mesh, in the same\n"
-);
-  printf(
-"  order, with new nodes added at the end of the .node file.  However, the\n");
-  printf(
-"  refinement is not hierarchical: there is no guarantee that each output\n");
-  printf(
-"  element is contained in a single input element.  Often, an output element\n"
-);
-  printf(
-"  can overlap two or three input elements, and some input edges are not\n");
-  printf(
-"  present in the output mesh.  Hence, a sequence of refined meshes forms a\n"
-);
-  printf(
-"  hierarchy of nodes, but not a hierarchy of elements.  If you refine a\n");
-  printf(
-"  mesh of higher-order elements, the hierarchical property applies only to\n"
-);
-  printf(
-"  the nodes at the corners of an element; the midpoint nodes on each edge\n");
-  printf("  are discarded before the mesh is refined.\n\n");
-  printf(
-"  Maximum area constraints in .poly files operate differently from those in\n"
-);
-  printf(
-"  .area files.  A maximum area in a .poly file applies to the whole\n");
-  printf(
-"  (segment-bounded) region in which a point falls, whereas a maximum area\n");
-  printf(
-"  in an .area file applies to only one triangle.  Area constraints in .poly\n"
-);
-  printf(
-"  files are used only when a mesh is first generated, whereas area\n");
-  printf(
-"  constraints in .area files are used only to refine an existing mesh, and\n"
-);
-  printf(
-"  are typically based on a posteriori error estimates resulting from a\n");
-  printf("  finite element simulation on that mesh.\n\n");
-  printf(
-"  `triangle -rq25 object.1' reads object.1.node and object.1.ele, then\n");
-  printf(
-"  refines the triangulation to enforce a 25 degree minimum angle, and then\n"
-);
-  printf(
-"  writes the refined triangulation to object.2.node and object.2.ele.\n");
-  printf("\n");
-  printf(
-"  `triangle -rpaa6.2 z.3' reads z.3.node, z.3.ele, z.3.poly, and z.3.area.\n"
-);
-  printf(
-"  After reconstructing the mesh and its subsegments, Triangle refines the\n");
-  printf(
-"  mesh so that no triangle has area greater than 6.2, and furthermore the\n");
-  printf(
-"  triangles satisfy the maximum area constraints in z.3.area.  No angle\n");
-  printf(
-"  bound is imposed at all.  The output is written to z.4.node, z.4.ele, and\n"
-);
-  printf("  z.4.poly.\n\n");
-  printf(
-"  The sequence `triangle -qa1 x', `triangle -rqa.3 x.1', `triangle -rqa.1\n");
-  printf(
-"  x.2' creates a sequence of successively finer meshes x.1, x.2, and x.3,\n");
-  printf("  suitable for multigrid.\n\n");
-  printf("Convex Hulls and Mesh Boundaries:\n\n");
-  printf(
-"  If the input is a vertex set (not a PSLG), Triangle produces its convex\n");
-  printf(
-"  hull as a by-product in the output .poly file if you use the -c switch.\n");
-  printf(
-"  There are faster algorithms for finding a two-dimensional convex hull\n");
-  printf("  than triangulation, of course, but this one comes for free.\n\n");
-  printf(
-"  If the input is an unconstrained mesh (you are using the -r switch but\n");
-  printf(
-"  not the -p switch), Triangle produces a list of its boundary edges\n");
-  printf(
-"  (including hole boundaries) as a by-product when you use the -c switch.\n");
-  printf(
-"  If you also use the -p switch, the output .poly file contains all the\n");
-  printf("  segments from the input .poly file as well.\n\n");
-  printf("Voronoi Diagrams:\n\n");
-  printf(
-"  The -v switch produces a Voronoi diagram, in files suffixed .v.node and\n");
-  printf(
-"  .v.edge.  For example, `triangle -v points' reads points.node, produces\n");
-  printf(
-"  its Delaunay triangulation in points.1.node and points.1.ele, and\n");
-  printf(
-"  produces its Voronoi diagram in points.1.v.node and points.1.v.edge.  The\n"
-);
-  printf(
-"  .v.node file contains a list of all Voronoi vertices, and the .v.edge\n");
-  printf(
-"  file contains a list of all Voronoi edges, some of which may be infinite\n"
-);
-  printf(
-"  rays.  (The choice of filenames makes it easy to run the set of Voronoi\n");
-  printf("  vertices through Triangle, if so desired.)\n\n");
-  printf(
-"  This implementation does not use exact arithmetic to compute the Voronoi\n"
-);
-  printf(
-"  vertices, and does not check whether neighboring vertices are identical.\n"
-);
-  printf(
-"  Be forewarned that if the Delaunay triangulation is degenerate or\n");
-  printf(
-"  near-degenerate, the Voronoi diagram may have duplicate vertices or\n");
-  printf("  crossing edges.\n\n");
-  printf(
-"  The result is a valid Voronoi diagram only if Triangle's output is a true\n"
-);
-  printf(
-"  Delaunay triangulation.  The Voronoi output is usually meaningless (and\n");
-  printf(
-"  may contain crossing edges and other pathology) if the output is a CDT or\n"
-);
-  printf(
-"  CCDT, or if it has holes or concavities.  If the triangulated domain is\n");
-  printf(
-"  convex and has no holes, you can use -D switch to force Triangle to\n");
-  printf(
-"  construct a conforming Delaunay triangulation instead of a CCDT, so the\n");
-  printf("  Voronoi diagram will be valid.\n\n");
-  printf("Mesh Topology:\n\n");
-  printf(
-"  You may wish to know which triangles are adjacent to a certain Delaunay\n");
-  printf(
-"  edge in an .edge file, which Voronoi cells are adjacent to a certain\n");
-  printf(
-"  Voronoi edge in a .v.edge file, or which Voronoi cells are adjacent to\n");
-  printf(
-"  each other.  All of this information can be found by cross-referencing\n");
-  printf(
-"  output files with the recollection that the Delaunay triangulation and\n");
-  printf("  the Voronoi diagram are planar duals.\n\n");
-  printf(
-"  Specifically, edge i of an .edge file is the dual of Voronoi edge i of\n");
-  printf(
-"  the corresponding .v.edge file, and is rotated 90 degrees counterclock-\n");
-  printf(
-"  wise from the Voronoi edge.  Triangle j of an .ele file is the dual of\n");
-  printf(
-"  vertex j of the corresponding .v.node file.  Voronoi cell k is the dual\n");
-  printf("  of vertex k of the corresponding .node file.\n\n");
-  printf(
-"  Hence, to find the triangles adjacent to a Delaunay edge, look at the\n");
-  printf(
-"  vertices of the corresponding Voronoi edge.  If the endpoints of a\n");
-  printf(
-"  Voronoi edge are Voronoi vertices 2 and 6 respectively, then triangles 2\n"
-);
-  printf(
-"  and 6 adjoin the left and right sides of the corresponding Delaunay edge,\n"
-);
-  printf(
-"  respectively.  To find the Voronoi cells adjacent to a Voronoi edge, look\n"
-);
-  printf(
-"  at the endpoints of the corresponding Delaunay edge.  If the endpoints of\n"
-);
-  printf(
-"  a Delaunay edge are input vertices 7 and 12, then Voronoi cells 7 and 12\n"
-);
-  printf(
-"  adjoin the right and left sides of the corresponding Voronoi edge,\n");
-  printf(
-"  respectively.  To find which Voronoi cells are adjacent to each other,\n");
-  printf("  just read the list of Delaunay edges.\n\n");
-  printf(
-"  Triangle does not write a list of the edges adjoining each Voronoi cell,\n"
-);
-  printf(
-"  but you can reconstructed it straightforwardly.  For instance, to find\n");
-  printf(
-"  all the edges of Voronoi cell 1, search the output .edge file for every\n");
-  printf(
-"  edge that has input vertex 1 as an endpoint.  The corresponding dual\n");
-  printf(
-"  edges in the output .v.edge file form the boundary of Voronoi cell 1.\n");
-  printf("\n");
-  printf(
-"  For each Voronoi vertex, the .neigh file gives a list of the three\n");
-  printf(
-"  Voronoi vertices attached to it.  You might find this more convenient\n");
-  printf("  than the .v.edge file.\n\n");
-  printf("Quadratic Elements:\n\n");
-  printf(
-"  Triangle generates meshes with subparametric quadratic elements if the\n");
-  printf(
-"  -o2 switch is specified.  Quadratic elements have six nodes per element,\n"
-);
-  printf(
-"  rather than three.  `Subparametric' means that the edges of the triangles\n"
-);
-  printf(
-"  are always straight, so that subparametric quadratic elements are\n");
-  printf(
-"  geometrically identical to linear elements, even though they can be used\n"
-);
-  printf(
-"  with quadratic interpolating functions.  The three extra nodes of an\n");
-  printf(
-"  element fall at the midpoints of the three edges, with the fourth, fifth,\n"
-);
-  printf(
-"  and sixth nodes appearing opposite the first, second, and third corners\n");
-  printf("  respectively.\n\n");
-  printf("Domains with Small Angles:\n\n");
-  printf(
-"  If two input segments adjoin each other at a small angle, clearly the -q\n"
-);
-  printf(
-"  switch cannot remove the small angle.  Moreover, Triangle may have no\n");
-  printf(
-"  choice but to generate additional triangles whose smallest angles are\n");
-  printf(
-"  smaller than the specified bound.  However, these triangles only appear\n");
-  printf(
-"  between input segments separated by small angles.  Moreover, if you\n");
-  printf(
-"  request a minimum angle of theta degrees, Triangle will generally produce\n"
-);
-  printf(
-"  no angle larger than 180 - 2 theta, even if it is forced to compromise on\n"
-);
-  printf("  the minimum angle.\n\n");
-  printf("Statistics:\n\n");
-  printf(
-"  After generating a mesh, Triangle prints a count of entities in the\n");
-  printf(
-"  output mesh, including the number of vertices, triangles, edges, exterior\n"
-);
-  printf(
-"  boundary edges (i.e. subsegments on the boundary of the triangulation,\n");
-  printf(
-"  including hole boundaries), interior boundary edges (i.e. subsegments of\n"
-);
-  printf(
-"  input segments not on the boundary), and total subsegments.  If you've\n");
-  printf(
-"  forgotten the statistics for an existing mesh, run Triangle on that mesh\n"
-);
-  printf(
-"  with the -rNEP switches to read the mesh and print the statistics without\n"
-);
-  printf(
-"  writing any files.  Use -rpNEP if you've got a .poly file for the mesh.\n");
-  printf("\n");
-  printf(
-"  The -V switch produces extended statistics, including a rough estimate\n");
-  printf(
-"  of memory use, the number of calls to geometric predicates, and\n");
-  printf(
-"  histograms of the angles and the aspect ratios of the triangles in the\n");
-  printf("  mesh.\n\n");
-  printf("Exact Arithmetic:\n\n");
-  printf(
-"  Triangle uses adaptive exact arithmetic to perform what computational\n");
-  printf(
-"  geometers call the `orientation' and `incircle' tests.  If the floating-\n"
-);
-  printf(
-"  point arithmetic of your machine conforms to the IEEE 754 standard (as\n");
-  printf(
-"  most workstations do), and does not use extended precision internal\n");
-  printf(
-"  floating-point registers, then your output is guaranteed to be an\n");
-  printf(
-"  absolutely true Delaunay or constrained Delaunay triangulation, roundoff\n"
-);
-  printf(
-"  error notwithstanding.  The word `adaptive' implies that these arithmetic\n"
-);
-  printf(
-"  routines compute the result only to the precision necessary to guarantee\n"
-);
-  printf(
-"  correctness, so they are usually nearly as fast as their approximate\n");
-  printf("  counterparts.\n\n");
-  printf(
-"  May CPUs, including Intel x86 processors, have extended precision\n");
-  printf(
-"  floating-point registers.  These must be reconfigured so their precision\n"
-);
-  printf(
-"  is reduced to memory precision.  Triangle does this if it is compiled\n");
-  printf("  correctly.  See the makefile for details.\n\n");
-  printf(
-"  The exact tests can be disabled with the -X switch.  On most inputs, this\n"
-);
-  printf(
-"  switch reduces the computation time by about eight percent--it's not\n");
-  printf(
-"  worth the risk.  There are rare difficult inputs (having many collinear\n");
-  printf(
-"  and cocircular vertices), however, for which the difference in speed\n");
-  printf(
-"  could be a factor of two.  Be forewarned that these are precisely the\n");
-  printf(
-"  inputs most likely to cause errors if you use the -X switch.  Hence, the\n"
-);
-  printf("  -X switch is not recommended.\n\n");
-  printf(
-"  Unfortunately, the exact tests don't solve every numerical problem.\n");
-  printf(
-"  Exact arithmetic is not used to compute the positions of new vertices,\n");
-  printf(
-"  because the bit complexity of vertex coordinates would grow without\n");
-  printf(
-"  bound.  Hence, segment intersections aren't computed exactly; in very\n");
-  printf(
-"  unusual cases, roundoff error in computing an intersection point might\n");
-  printf(
-"  actually lead to an inverted triangle and an invalid triangulation.\n");
-  printf(
-"  (This is one reason to specify your own intersection points in your .poly\n"
-);
-  printf(
-"  files.)  Similarly, exact arithmetic is not used to compute the vertices\n"
-);
-  printf("  of the Voronoi diagram.\n\n");
-  printf(
-"  Another pair of problems not solved by the exact arithmetic routines is\n");
-  printf(
-"  underflow and overflow.  If Triangle is compiled for double precision\n");
-  printf(
-"  arithmetic, I believe that Triangle's geometric predicates work correctly\n"
-);
-  printf(
-"  if the exponent of every input coordinate falls in the range [-148, 201].\n"
-);
-  printf(
-"  Underflow can silently prevent the orientation and incircle tests from\n");
-  printf(
-"  being performed exactly, while overflow typically causes a floating\n");
-  printf("  exception.\n\n");
-  printf("Calling Triangle from Another Program:\n\n");
-  printf("  Read the file triangle.h for details.\n\n");
-  printf("Troubleshooting:\n\n");
-  printf("  Please read this section before mailing me bugs.\n\n");
-  printf("  `My output mesh has no triangles!'\n\n");
-  printf(
-"    If you're using a PSLG, you've probably failed to specify a proper set\n"
-);
-  printf(
-"    of bounding segments, or forgotten to use the -c switch.  Or you may\n");
-  printf(
-"    have placed a hole badly, thereby eating all your triangles.  To test\n");
-  printf("    these possibilities, try again with the -c and -O switches.\n");
-  printf(
-"    Alternatively, all your input vertices may be collinear, in which case\n"
-);
-  printf("    you can hardly expect to triangulate them.\n\n");
-  printf("  `Triangle doesn't terminate, or just crashes.'\n\n");
-  printf(
-"    Bad things can happen when triangles get so small that the distance\n");
-  printf(
-"    between their vertices isn't much larger than the precision of your\n");
-  printf(
-"    machine's arithmetic.  If you've compiled Triangle for single-precision\n"
-);
-  printf(
-"    arithmetic, you might do better by recompiling it for double-precision.\n"
-);
-  printf(
-"    Then again, you might just have to settle for more lenient constraints\n"
-);
-  printf(
-"    on the minimum angle and the maximum area than you had planned.\n");
-  printf("\n");
-  printf(
-"    You can minimize precision problems by ensuring that the origin lies\n");
-  printf(
-"    inside your vertex set, or even inside the densest part of your\n");
-  printf(
-"    mesh.  If you're triangulating an object whose x-coordinates all fall\n");
-  printf(
-"    between 6247133 and 6247134, you're not leaving much floating-point\n");
-  printf("    precision for Triangle to work with.\n\n");
-  printf(
-"    Precision problems can occur covertly if the input PSLG contains two\n");
-  printf(
-"    segments that meet (or intersect) at an extremely small angle, or if\n");
-  printf(
-"    such an angle is introduced by the -c switch.  If you don't realize\n");
-  printf(
-"    that a tiny angle is being formed, you might never discover why\n");
-  printf(
-"    Triangle is crashing.  To check for this possibility, use the -S switch\n"
-);
-  printf(
-"    (with an appropriate limit on the number of Steiner points, found by\n");
-  printf(
-"    trial-and-error) to stop Triangle early, and view the output .poly file\n"
-);
-  printf(
-"    with Show Me (described below).  Look carefully for regions where dense\n"
-);
-  printf(
-"    clusters of vertices are forming and for small angles between segments.\n"
-);
-  printf(
-"    Zoom in closely, as such segments might look like a single segment from\n"
-);
-  printf("    a distance.\n\n");
-  printf(
-"    If some of the input values are too large, Triangle may suffer a\n");
-  printf(
-"    floating exception due to overflow when attempting to perform an\n");
-  printf(
-"    orientation or incircle test.  (Read the section on exact arithmetic\n");
-  printf(
-"    above.)  Again, I recommend compiling Triangle for double (rather\n");
-  printf("    than single) precision arithmetic.\n\n");
-  printf(
-"    Unexpected problems can arise if you use quality meshing (-q, -a, or\n");
-  printf(
-"    -u) with an input that is not segment-bounded--that is, if your input\n");
-  printf(
-"    is a vertex set, or you're using the -c switch.  If the convex hull of\n"
-);
-  printf(
-"    your input vertices has collinear vertices on its boundary, an input\n");
-  printf(
-"    vertex that you think lies on the convex hull might actually lie just\n");
-  printf(
-"    inside the convex hull.  If so, the vertex and the nearby convex hull\n");
-  printf(
-"    edge form an extremely thin triangle.  When Triangle tries to refine\n");
-  printf(
-"    the mesh to enforce angle and area constraints, Triangle might generate\n"
-);
-  printf(
-"    extremely tiny triangles, or it might fail because of insufficient\n");
-  printf("    floating-point precision.\n\n");
-  printf(
-"  `The numbering of the output vertices doesn't match the input vertices.'\n"
-);
-  printf("\n");
-  printf(
-"    You may have had duplicate input vertices, or you may have eaten some\n");
-  printf(
-"    of your input vertices with a hole, or by placing them outside the area\n"
-);
-  printf(
-"    enclosed by segments.  In any case, you can solve the problem by not\n");
-  printf("    using the -j switch.\n\n");
-  printf(
-"  `Triangle executes without incident, but when I look at the resulting\n");
-  printf(
-"  mesh, it has overlapping triangles or other geometric inconsistencies.'\n");
-  printf("\n");
-  printf(
-"    If you select the -X switch, Triangle occasionally makes mistakes due\n");
-  printf(
-"    to floating-point roundoff error.  Although these errors are rare,\n");
-  printf(
-"    don't use the -X switch.  If you still have problems, please report the\n"
-);
-  printf("    bug.\n\n");
-  printf(
-"  `Triangle executes without incident, but when I look at the resulting\n");
-  printf("  Voronoi diagram, it has overlapping edges or other geometric\n");
-  printf("  inconsistencies.'\n");
-  printf("\n");
-  printf(
-"    If your input is a PSLG (-p), you can only expect a meaningful Voronoi\n"
-);
-  printf(
-"    diagram if the domain you are triangulating is convex and free of\n");
-  printf(
-"    holes, and you use the -D switch to construct a conforming Delaunay\n");
-  printf("    triangulation (instead of a CDT or CCDT).\n\n");
-  printf(
-"  Strange things can happen if you've taken liberties with your PSLG.  Do\n");
-  printf(
-"  you have a vertex lying in the middle of a segment?  Triangle sometimes\n");
-  printf(
-"  copes poorly with that sort of thing.  Do you want to lay out a collinear\n"
-);
-  printf(
-"  row of evenly spaced, segment-connected vertices?  Have you simply\n");
-  printf(
-"  defined one long segment connecting the leftmost vertex to the rightmost\n"
-);
-  printf(
-"  vertex, and a bunch of vertices lying along it?  This method occasionally\n"
-);
-  printf(
-"  works, especially with horizontal and vertical lines, but often it\n");
-  printf(
-"  doesn't, and you'll have to connect each adjacent pair of vertices with a\n"
-);
-  printf("  separate segment.  If you don't like it, tough.\n\n");
-  printf(
-"  Furthermore, if you have segments that intersect other than at their\n");
-  printf(
-"  endpoints, try not to let the intersections fall extremely close to PSLG\n"
-);
-  printf("  vertices or each other.\n\n");
-  printf(
-"  If you have problems refining a triangulation not produced by Triangle:\n");
-  printf(
-"  Are you sure the triangulation is geometrically valid?  Is it formatted\n");
-  printf(
-"  correctly for Triangle?  Are the triangles all listed so the first three\n"
-);
-  printf(
-"  vertices are their corners in counterclockwise order?  Are all of the\n");
-  printf(
-"  triangles constrained Delaunay?  Triangle's Delaunay refinement algorithm\n"
-);
-  printf("  assumes that it starts with a CDT.\n\n");
-  printf("Show Me:\n\n");
-  printf(
-"  Triangle comes with a separate program named `Show Me', whose primary\n");
-  printf(
-"  purpose is to draw meshes on your screen or in PostScript.  Its secondary\n"
-);
-  printf(
-"  purpose is to check the validity of your input files, and do so more\n");
-  printf(
-"  thoroughly than Triangle does.  Unlike Triangle, Show Me requires that\n");
-  printf(
-"  you have the X Windows system.  Sorry, Microsoft Windows users.\n");
-  printf("\n");
-  printf("Triangle on the Web:\n");
-  printf("\n");
-  printf("  To see an illustrated version of these instructions, check out\n");
-  printf("\n");
-  printf("    http://www.cs.cmu.edu/~quake/triangle.html\n");
-  printf("\n");
-  printf("A Brief Plea:\n");
-  printf("\n");
-  printf(
-"  If you use Triangle, and especially if you use it to accomplish real\n");
-  printf(
-"  work, I would like very much to hear from you.  A short letter or email\n");
-  printf(
-"  (to jrs@cs.berkeley.edu) describing how you use Triangle will mean a lot\n"
-);
-  printf(
-"  to me.  The more people I know are using this program, the more easily I\n"
-);
-  printf(
-"  can justify spending time on improvements, which in turn will benefit\n");
-  printf(
-"  you.  Also, I can put you on a list to receive email whenever a new\n");
-  printf("  version of Triangle is available.\n\n");
-  printf(
-"  If you use a mesh generated by Triangle in a publication, please include\n"
-);
-  printf(
-"  an acknowledgment as well.  And please spell Triangle with a capital `T'!\n"
-);
-  printf(
-"  If you want to include a citation, use `Jonathan Richard Shewchuk,\n");
-  printf(
-"  ``Triangle: Engineering a 2D Quality Mesh Generator and Delaunay\n");
-  printf(
-"  Triangulator,'' in Applied Computational Geometry:  Towards Geometric\n");
-  printf(
-"  Engineering (Ming C. Lin and Dinesh Manocha, editors), volume 1148 of\n");
-  printf(
-"  Lecture Notes in Computer Science, pages 203-222, Springer-Verlag,\n");
-  printf(
-"  Berlin, May 1996.  (From the First ACM Workshop on Applied Computational\n"
-);
-  printf("  Geometry.)'\n\n");
-  printf("Research credit:\n\n");
-  printf(
-"  Of course, I can take credit for only a fraction of the ideas that made\n");
-  printf(
-"  this mesh generator possible.  Triangle owes its existence to the efforts\n"
-);
-  printf(
-"  of many fine computational geometers and other researchers, including\n");
-  printf(
-"  Marshall Bern, L. Paul Chew, Kenneth L. Clarkson, Boris Delaunay, Rex A.\n"
-);
-  printf(
-"  Dwyer, David Eppstein, Steven Fortune, Leonidas J. Guibas, Donald E.\n");
-  printf(
-"  Knuth, Charles L. Lawson, Der-Tsai Lee, Gary L. Miller, Ernst P. Mucke,\n");
-  printf(
-"  Steven E. Pav, Douglas M. Priest, Jim Ruppert, Isaac Saias, Bruce J.\n");
-  printf(
-"  Schachter, Micha Sharir, Peter W. Shor, Daniel D. Sleator, Jorge Stolfi,\n"
-);
-  printf("  Robert E. Tarjan, Alper Ungor, Christopher J. Van Wyk, Noel J.\n");
-  printf(
-"  Walkington, and Binhai Zhu.  See the comments at the beginning of the\n");
-  printf("  source code for references.\n\n");
+
+  printf(R"(
+
+Triangle generates exact Delaunay triangulations, constrained Delaunay
+triangulations, conforming Delaunay triangulations, Voronoi diagrams, and
+high-quality triangular meshes.  The latter can be generated with no small
+or large angles, and are thus suitable for finite element analysis.  If no
+command line switch is specified, your .node input file is read, and the
+Delaunay triangulation is returned in .node and .ele output files.  The
+command syntax is:
+
+triangle [-prq__a__uAcDjevngBPNEIOXzo_YS__iFlsCQVh] input_file
+
+Underscores indicate that numbers may optionally follow certain switches.
+Do not leave any space between a switch and its numeric parameter.
+input_file must be a file with extension .node, or extension .poly if the
+-p switch is used.  If -r is used, you must supply .node and .ele files,
+and possibly a .poly file and an .area file as well.  The formats of these
+files are described below.
+
+Command Line Switches:
+
+    -p  Reads a Planar Straight Line Graph (.poly file), which can specify
+        vertices, segments, holes, regional attributes, and regional area
+        constraints.  Generates a constrained Delaunay triangulation (CDT)
+        fitting the input; or, if -s, -q, -a, or -u is used, a conforming
+        constrained Delaunay triangulation (CCDT).  If you want a truly
+        Delaunay (not just constrained Delaunay) triangulation, use -D as
+        well.  When -p is not used, Triangle reads a .node file by default.
+    -r  Refines a previously generated mesh.  The mesh is read from a .node
+        file and an .ele file.  If -p is also used, a .poly file is read
+        and used to constrain segments in the mesh.  If -a is also used
+        (with no number following), an .area file is read and used to
+        impose area constraints on the mesh.  Further details on refinement
+        appear below.
+    -q  Quality mesh generation by Delaunay refinement (a hybrid of Paul
+        Chew's and Jim Ruppert's algorithms).  Adds vertices to the mesh to
+        ensure that all angles are between 20 and 140 degrees.  An
+        alternative bound on the minimum angle, replacing 20 degrees, may
+        be specified after the `q'.  The specified angle may include a
+        decimal point, but not exponential notation.  Note that a bound of
+        theta degrees on the smallest angle also implies a bound of
+        (180 - 2 theta) on the largest angle.  If the minimum angle is 28.6
+        degrees or smaller, Triangle is mathematically guaranteed to
+        terminate (assuming infinite precision arithmetic--Triangle may
+        fail to terminate if you run out of precision).  In practice,
+        Triangle often succeeds for minimum angles up to 34 degrees.  For
+        some meshes, however, you might need to reduce the minimum angle to
+        avoid problems associated with insufficient floating-point
+        precision.
+    -a  Imposes a maximum triangle area.  If a number follows the `a', no
+        triangle is generated whose area is larger than that number.  If no
+        number is specified, an .area file (if -r is used) or .poly file
+        (if -r is not used) specifies a set of maximum area constraints.
+        An .area file contains a separate area constraint for each
+        triangle, and is useful for refining a finite element mesh based on
+        a posteriori error estimates.  A .poly file can optionally contain
+        an area constraint for each segment-bounded region, thereby
+        controlling triangle densities in a first triangulation of a PSLG.
+        You can impose both a fixed area constraint and a varying area
+        constraint by invoking the -a switch twice, once with and once
+        without a number following.  Each area specified may include a
+        decimal point.
+    -u  Imposes a user-defined constraint on triangle size.  There are two
+        ways to use this feature.  One is to edit the triunsuitable()
+        procedure in triangle.c to encode any constraint you like, then
+        recompile Triangle.  The other is to compile triangle.c with the
+        EXTERNAL_TEST symbol set (compiler switch -DEXTERNAL_TEST), then
+        link Triangle with a separate object file that implements
+        triunsuitable().  In either case, the -u switch causes the user-
+        defined test to be applied to every triangle.
+    -A  Assigns an additional floating-point attribute to each triangle
+        that identifies what segment-bounded region each triangle belongs
+        to.  Attributes are assigned to regions by the .poly file.  If a
+        region is not explicitly marked by the .poly file, triangles in
+        that region are assigned an attribute of zero.  The -A switch has
+        an effect only when the -p switch is used and the -r switch is not.
+    -c  Creates segments on the convex hull of the triangulation.  If you
+        are triangulating a vertex set, this switch causes a .poly file to
+        be written, containing all edges of the convex hull.  If you are
+        triangulating a PSLG, this switch specifies that the whole convex
+        hull of the PSLG should be triangulated, regardless of what
+        segments the PSLG has.  If you do not use this switch when
+        triangulating a PSLG, Triangle assumes that you have identified the
+        region to be triangulated by surrounding it with segments of the
+        input PSLG.  Beware:  if you are not careful, this switch can cause
+        the introduction of an extremely thin angle between a PSLG segment
+        and a convex hull segment, which can cause overrefinement (and
+        possibly failure if Triangle runs out of precision).  If you are
+        refining a mesh, the -c switch works differently:  it causes a
+        .poly file to be written containing the boundary edges of the mesh
+        (useful if no .poly file was read).
+    -D  Conforming Delaunay triangulation:  use this switch if you want to
+        ensure that all the triangles in the mesh are Delaunay, and not
+        merely constrained Delaunay; or if you want to ensure that all the
+        Voronoi vertices lie within the triangulation.  (Some finite volume
+        methods have this requirement.)  This switch invokes Ruppert's
+        original algorithm, which splits every subsegment whose diametral
+        circle is encroached.  It usually increases the number of vertices
+        and triangles.
+    -j  Jettisons vertices that are not part of the final triangulation
+        from the output .node file.  By default, Triangle copies all
+        vertices in the input .node file to the output .node file, in the
+        same order, so their indices do not change.  The -j switch prevents
+        duplicated input vertices, or vertices `eaten' by holes, from
+        appearing in the output .node file.  Thus, if two input vertices
+        have exactly the same coordinates, only the first appears in the
+        output.  If any vertices are jettisoned, the vertex numbering in
+        the output .node file differs from that of the input .node file.
+    -e  Outputs (to an .edge file) a list of edges of the triangulation.
+    -v  Outputs the Voronoi diagram associated with the triangulation.
+        Does not attempt to detect degeneracies, so some Voronoi vertices
+        may be duplicated.  See the discussion of Voronoi diagrams below.
+    -n  Outputs (to a .neigh file) a list of triangles neighboring each
+        triangle.
+    -g  Outputs the mesh to an Object File Format (.off) file, suitable for
+        viewing with the Geometry Center's Geomview package.
+    -B  No boundary markers in the output .node, .poly, and .edge output
+        files.  See the detailed discussion of boundary markers below.
+    -P  No output .poly file.  Saves disk space, but you lose the ability
+        to maintain constraining segments on later refinements of the mesh.
+    -N  No output .node file.
+    -E  No output .ele file.
+    -I  No iteration numbers.  Suppresses the output of .node and .poly
+        files, so your input files won't be overwritten.  (If your input is
+        a .poly file only, a .node file is written.)  Cannot be used with
+        the -r switch, because that would overwrite your input .ele file.
+        Shouldn't be used with the -q, -a, -u, or -s switch if you are
+        using a .node file for input, because no .node file is written, so
+        there is no record of any added Steiner points.
+    -O  No holes.  Ignores the holes in the .poly file.
+    -X  No exact arithmetic.  Normally, Triangle uses exact floating-point
+        arithmetic for certain tests if it thinks the inexact tests are not
+        accurate enough.  Exact arithmetic ensures the robustness of the
+        triangulation algorithms, despite floating-point roundoff error.
+        Disabling exact arithmetic with the -X switch causes a small
+        improvement in speed and creates the possibility that Triangle will
+        fail to produce a valid mesh.  Not recommended.
+    -z  Numbers all items starting from zero (rather than one).  Note that
+        this switch is normally overridden by the value used to number the
+        first vertex of the input .node or .poly file.  However, this
+        switch is useful when calling Triangle from another program.
+    -o2 Generates second-order subparametric elements with six nodes each.
+    -Y  No new vertices on the boundary.  This switch is useful when the
+        mesh boundary must be preserved so that it conforms to some
+        adjacent mesh.  Be forewarned that you will probably sacrifice much
+        of the quality of the mesh; Triangle will try, but the resulting
+        mesh may contain poorly shaped triangles.  Works well if all the
+        boundary vertices are closely spaced.  Specify this switch twice
+        (`-YY') to prevent all segment splitting, including internal
+        boundaries.
+    -S  Specifies the maximum number of Steiner points (vertices that are
+        not in the input, but are added to meet the constraints on minimum
+        angle and maximum area).  The default is to allow an unlimited
+        number.  If you specify this switch with no number after it,
+        the limit is set to zero.  Triangle always adds vertices at segment
+        intersections, even if it needs to use more vertices than the limit
+        you set.  When Triangle inserts segments by splitting (-s), it
+        always adds enough vertices to ensure that all the segments of the
+        PLSG are recovered, ignoring the limit if necessary.
+    -i  Uses an incremental rather than a divide-and-conquer algorithm to
+        construct a Delaunay triangulation.  Try it if the divide-and-
+        conquer algorithm fails.
+    -F  Uses Steven Fortune's sweepline algorithm to construct a Delaunay
+        triangulation.  Warning:  does not use exact arithmetic for all
+        calculations.  An exact result is not guaranteed.
+    -l  Uses only vertical cuts in the divide-and-conquer algorithm.  By
+        default, Triangle alternates between vertical and horizontal cuts,
+        which usually improve the speed except with vertex sets that are
+        small or short and wide.  This switch is primarily of theoretical
+        interest.
+    -s  Specifies that segments should be forced into the triangulation by
+        recursively splitting them at their midpoints, rather than by
+        generating a constrained Delaunay triangulation.  Segment splitting
+        is true to Ruppert's original algorithm, but can create needlessly
+        small triangles.  This switch is primarily of theoretical interest.
+    -C  Check the consistency of the final mesh.  Uses exact arithmetic for
+        checking, even if the -X switch is used.  Useful if you suspect
+        Triangle is buggy.
+    -Q  Quiet:  Suppresses all explanation of what Triangle is doing,
+        unless an error occurs.
+    -V  Verbose:  Gives detailed information about what Triangle is doing.
+        Add more `V's for increasing amount of detail.  `-V' is most
+        useful; itgives information on algorithmic progress and much more
+        detailed statistics.  `-VV' gives vertex-by-vertex details, and
+        prints so much that Triangle runs much more slowly.  `-VVVV' gives
+        information only a debugger could love.
+    -h  Help:  Displays these instructions.
+
+Definitions:
+
+  A Delaunay triangulation of a vertex set is a triangulation whose
+  vertices are the vertex set, that covers the convex hull of the vertex
+  set.  A Delaunay triangulation has the property that no vertex lies
+  inside the circumscribing circle (circle that passes through all three
+  vertices) of any triangle in the triangulation.
+
+  A Voronoi diagram of a vertex set is a subdivision of the plane into
+  polygonal cells (some of which may be unbounded, meaning infinitely
+  large), where each cell is the set of points in the plane that are closer
+  to some input vertex than to any other input vertex.  The Voronoi diagram
+  is a geometric dual of the Delaunay triangulation.
+
+  A Planar Straight Line Graph (PSLG) is a set of vertices and segments.
+  Segments are simply edges, whose endpoints are all vertices in the PSLG.
+  Segments may intersect each other only at their endpoints.  The file
+  format for PSLGs (.poly files) is described below.
+
+  A constrained Delaunay triangulation (CDT) of a PSLG is similar to a
+  Delaunay triangulation, but each PSLG segment is present as a single edge
+  of the CDT.  (A constrained Delaunay triangulation is not truly a
+  Delaunay triangulation, because some of its triangles might not be
+  Delaunay.)  By definition, a CDT does not have any vertices other than
+  those specified in the input PSLG.  Depending on context, a CDT might
+  cover the convex hull of the PSLG, or it might cover only a segment-
+  bounded region (e.g. a polygon).
+
+  A conforming Delaunay triangulation of a PSLG is a triangulation in which
+  each triangle is truly Delaunay, and each PSLG segment is represented by
+  a linear contiguous sequence of edges of the triangulation.  New vertices
+  (not part of the PSLG) may appear, and each input segment may have been
+  subdivided into shorter edges (subsegments) by these additional vertices.
+  The new vertices are frequently necessary to maintain the Delaunay
+  property while ensuring that every segment is represented.
+
+  A conforming constrained Delaunay triangulation (CCDT) of a PSLG is a
+  triangulation of a PSLG whose triangles are constrained Delaunay.  New
+  vertices may appear, and input segments may be subdivided into
+  subsegments, but not to guarantee that segments are respected; rather, to
+  improve the quality of the triangles.  The high-quality meshes produced
+  by the -q switch are usually CCDTs, but can be made conforming Delaunay
+  with the -D switch.
+
+File Formats:
+
+  All files may contain comments prefixed by the character '#'.  Vertices,
+  triangles, edges, holes, and maximum area constraints must be numbered
+  consecutively, starting from either 1 or 0.  Whichever you choose, all
+  input files must be consistent; if the vertices are numbered from 1, so
+  must be all other objects.  Triangle automatically detects your choice
+  while reading the .node (or .poly) file.  (When calling Triangle from
+  another program, use the -z switch if you wish to number objects from
+  zero.)  Examples of these file formats are given below.
+
+  .node files:
+    First line:  <# of vertices> <dimension (must be 2)> <# of attributes>
+                                           <# of boundary markers (0 or 1)>
+    Remaining lines:  <vertex #> <x> <y> [attributes] [boundary marker]
+
+    The attributes, which are typically floating-point values of physical
+    quantities (such as mass or conductivity) associated with the nodes of
+    a finite element mesh, are copied unchanged to the output mesh.  If -q,
+    -a, -u, -D, or -s is selected, each new Steiner point added to the mesh
+    has attributes assigned to it by linear interpolation.
+
+    If the fourth entry of the first line is `1', the last column of the
+    remainder of the file is assumed to contain boundary markers.  Boundary
+    markers are used to identify boundary vertices and vertices resting on
+    PSLG segments; a complete description appears in a section below.  The
+    .node file produced by Triangle contains boundary markers in the last
+    column unless they are suppressed by the -B switch.
+
+  .ele files:
+    First line:  <# of triangles> <nodes per triangle> <# of attributes>
+    Remaining lines:  <triangle #> <node> <node> <node> ... [attributes]
+
+    Nodes are indices into the corresponding .node file.  The first three
+    nodes are the corner vertices, and are listed in counterclockwise order
+    around each triangle.  (The remaining nodes, if any, depend on the type
+    of finite element used.)
+
+    The attributes are just like those of .node files.  Because there is no
+    simple mapping from input to output triangles, Triangle attempts to
+    interpolate attributes, and may cause a lot of diffusion of attributes
+    among nearby triangles as the triangulation is refined.  Attributes do
+    not diffuse across segments, so attributes used to identify
+    segment-bounded regions remain intact.
+
+    In .ele files produced by Triangle, each triangular element has three
+    nodes (vertices) unless the -o2 switch is used, in which case
+    subparametric quadratic elements with six nodes each are generated.
+    The first three nodes are the corners in counterclockwise order, and
+    the fourth, fifth, and sixth nodes lie on the midpoints of the edges
+    opposite the first, second, and third vertices, respectively.
+
+  .poly files:
+    First line:  <# of vertices> <dimension (must be 2)> <# of attributes>
+                                           <# of boundary markers (0 or 1)>
+    Following lines:  <vertex #> <x> <y> [attributes] [boundary marker]
+    One line:  <# of segments> <# of boundary markers (0 or 1)>
+    Following lines:  <segment #> <endpoint> <endpoint> [boundary marker]
+    One line:  <# of holes>
+    Following lines:  <hole #> <x> <y>
+    Optional line:  <# of regional attributes and/or area constraints>
+    Optional following lines:  <region #> <x> <y> <attribute> <max area>
+
+    A .poly file represents a PSLG, as well as some additional information.
+    The first section lists all the vertices, and is identical to the
+    format of .node files.  <# of vertices> may be set to zero to indicate
+    that the vertices are listed in a separate .node file; .poly files
+    produced by Triangle always have this format.  A vertex set represented
+    this way has the advantage that it may easily be triangulated with or
+    without segments (depending on whether the -p switch is invoked).
+
+    The second section lists the segments.  Segments are edges whose
+    presence in the triangulation is enforced.  (Depending on the choice of
+    switches, segment might be subdivided into smaller edges).  Each
+    segment is specified by listing the indices of its two endpoints.  This
+    means that you must include its endpoints in the vertex list.  Each
+    segment, like each point, may have a boundary marker.
+
+    If -q, -a, -u, and -s are not selected, Triangle produces a constrained
+    Delaunay triangulation (CDT), in which each segment appears as a single
+    edge in the triangulation.  If -q, -a, -u, or -s is selected, Triangle
+    produces a conforming constrained Delaunay triangulation (CCDT), in
+    which segments may be subdivided into smaller edges.  If -D is
+    selected, Triangle produces a conforming Delaunay triangulation, so
+    that every triangle is Delaunay, and not just constrained Delaunay.
+
+    The third section lists holes (and concavities, if -c is selected) in
+    the triangulation.  Holes are specified by identifying a point inside
+    each hole.  After the triangulation is formed, Triangle creates holes
+    by eating triangles, spreading out from each hole point until its
+    progress is blocked by segments in the PSLG.  You must be careful to
+    enclose each hole in segments, or your whole triangulation might be
+    eaten away.  If the two triangles abutting a segment are eaten, the
+    segment itself is also eaten.  Do not place a hole directly on a
+    segment; if you do, Triangle chooses one side of the segment
+    arbitrarily.
+
+    The optional fourth section lists regional attributes (to be assigned
+    to all triangles in a region) and regional constraints on the maximum
+    triangle area.  Triangle reads this section only if the -A switch is
+    used or the -a switch is used without a number following it, and the -r
+    switch is not used.  Regional attributes and area constraints are
+    propagated in the same manner as holes:  you specify a point for each
+    attribute and/or constraint, and the attribute and/or constraint
+    affects the whole region (bounded by segments) containing the point.
+    If two values are written on a line after the x and y coordinate, the
+    first such value is assumed to be a regional attribute (but is only
+    applied if the -A switch is selected), and the second value is assumed
+    to be a regional area constraint (but is only applied if the -a switch
+    is selected).  You may specify just one value after the coordinates,
+    which can serve as both an attribute and an area constraint, depending
+    on the choice of switches.  If you are using the -A and -a switches
+    simultaneously and wish to assign an attribute to some region without
+    imposing an area constraint, use a negative maximum area.
+
+    When a triangulation is created from a .poly file, you must either
+    enclose the entire region to be triangulated in PSLG segments, or
+    use the -c switch, which automatically creates extra segments that
+    enclose the convex hull of the PSLG.  If you do not use the -c switch,
+    Triangle eats all triangles that are not enclosed by segments; if you
+    are not careful, your whole triangulation may be eaten away.  If you do
+    use the -c switch, you can still produce concavities by the appropriate
+    placement of holes just inside the boundary of the convex hull.
+
+    An ideal PSLG has no intersecting segments, nor any vertices that lie
+    upon segments (except, of course, the endpoints of each segment).  You
+    aren't required to make your .poly files ideal, but you should be aware
+    of what can go wrong.  Segment intersections are relatively safe--
+    Triangle calculates the intersection points for you and adds them to
+    the triangulation--as long as your machine's floating-point precision
+    doesn't become a problem.  You are tempting the fates if you have three
+    segments that cross at the same location, and expect Triangle to figure
+    out where the intersection point is.  Thanks to floating-point roundoff
+    error, Triangle will probably decide that the three segments intersect
+    at three different points, and you will find a minuscule triangle in
+    your output--unless Triangle tries to refine the tiny triangle, uses
+    up the last bit of machine precision, and fails to terminate at all.
+    You're better off putting the intersection point in the input files,
+    and manually breaking up each segment into two.  Similarly, if you
+    place a vertex at the middle of a segment, and hope that Triangle will
+    break up the segment at that vertex, you might get lucky.  On the other
+    hand, Triangle might decide that the vertex doesn't lie precisely on
+    the segment, and you'll have a needle-sharp triangle in your output--or
+    a lot of tiny triangles if you're generating a quality mesh.
+
+    When Triangle reads a .poly file, it also writes a .poly file, which
+    includes all the subsegments--the edges that are parts of input
+    segments.  If the -c switch is used, the output .poly file also
+    includes all of the edges on the convex hull.  Hence, the output .poly
+    file is useful for finding edges associated with input segments and for
+    setting boundary conditions in finite element simulations.  Moreover,
+    you will need the output .poly file if you plan to refine the output
+    mesh, and don't want segments to be missing in later triangulations.
+
+  .area files:
+    First line:  <# of triangles>
+    Following lines:  <triangle #> <maximum area>
+
+    An .area file associates with each triangle a maximum area that is used
+    for mesh refinement.  As with other file formats, every triangle must
+    be represented, and the triangles must be numbered consecutively.  A
+    triangle may be left unconstrained by assigning it a negative maximum
+    area.
+
+  .edge files:
+    First line:  <# of edges> <# of boundary markers (0 or 1)>
+    Following lines:  <edge #> <endpoint> <endpoint> [boundary marker]
+
+    Endpoints are indices into the corresponding .node file.  Triangle can
+    produce .edge files (use the -e switch), but cannot read them.  The
+    optional column of boundary markers is suppressed by the -B switch.
+
+    In Voronoi diagrams, one also finds a special kind of edge that is an
+    infinite ray with only one endpoint.  For these edges, a different
+    format is used:
+
+        <edge #> <endpoint> -1 <direction x> <direction y>
+
+    The `direction' is a floating-point vector that indicates the direction
+    of the infinite ray.
+
+  .neigh files:
+    First line:  <# of triangles> <# of neighbors per triangle (always 3)>
+    Following lines:  <triangle #> <neighbor> <neighbor> <neighbor>
+
+    Neighbors are indices into the corresponding .ele file.  An index of -1
+    indicates no neighbor (because the triangle is on an exterior
+    boundary).  The first neighbor of triangle i is opposite the first
+    corner of triangle i, and so on.
+
+    Triangle can produce .neigh files (use the -n switch), but cannot read
+    them.
+
+Boundary Markers:
+
+  Boundary markers are tags used mainly to identify which output vertices
+  and edges are associated with which PSLG segment, and to identify which
+  vertices and edges occur on a boundary of the triangulation.  A common
+  use is to determine where boundary conditions should be applied to a
+  finite element mesh.  You can prevent boundary markers from being written
+  into files produced by Triangle by using the -B switch.
+
+  The boundary marker associated with each segment in an output .poly file
+  and each edge in an output .edge file is chosen as follows:
+    - If an output edge is part or all of a PSLG segment with a nonzero
+      boundary marker, then the edge is assigned the same marker.
+    - Otherwise, if the edge lies on a boundary of the triangulation
+      (even the boundary of a hole), then the edge is assigned the marker
+      one (1).
+    - Otherwise, the edge is assigned the marker zero (0).
+  The boundary marker associated with each vertex in an output .node file
+  is chosen as follows:
+    - If a vertex is assigned a nonzero boundary marker in the input file,
+      then it is assigned the same marker in the output .node file.
+    - Otherwise, if the vertex lies on a PSLG segment (even if it is an
+      endpoint of the segment) with a nonzero boundary marker, then the
+      vertex is assigned the same marker.  If the vertex lies on several
+      such segments, one of the markers is chosen arbitrarily.
+    - Otherwise, if the vertex occurs on a boundary of the triangulation,
+      then the vertex is assigned the marker one (1).
+    - Otherwise, the vertex is assigned the marker zero (0).
+
+  If you want Triangle to determine for you which vertices and edges are on
+  the boundary, assign them the boundary marker zero (or use no markers at
+  all) in your input files.  In the output files, all boundary vertices,
+  edges, and segments will be assigned the value one.
+
+Triangulation Iteration Numbers:
+
+  Because Triangle can read and refine its own triangulations, input
+  and output files have iteration numbers.  For instance, Triangle might
+  read the files mesh.3.node, mesh.3.ele, and mesh.3.poly, refine the
+  triangulation, and output the files mesh.4.node, mesh.4.ele, and
+  mesh.4.poly.  Files with no iteration number are treated as if
+  their iteration number is zero; hence, Triangle might read the file
+  points.node, triangulate it, and produce the files points.1.node and
+  points.1.ele.
+
+  Iteration numbers allow you to create a sequence of successively finer
+  meshes suitable for multigrid methods.  They also allow you to produce a
+  sequence of meshes using error estimate-driven mesh refinement.
+
+  If you're not using refinement or quality meshing, and you don't like
+  iteration numbers, use the -I switch to disable them.  This switch also
+  disables output of .node and .poly files to prevent your input files from
+  being overwritten.  (If the input is a .poly file that contains its own
+  points, a .node file is written.  This can be quite convenient for
+  computing CDTs or quality meshes.)
+
+Examples of How to Use Triangle:
+
+  `triangle dots' reads vertices from dots.node, and writes their Delaunay
+  triangulation to dots.1.node and dots.1.ele.  (dots.1.node is identical
+  to dots.node.)  `triangle -I dots' writes the triangulation to dots.ele
+  instead.  (No additional .node file is needed, so none is written.)
+
+  `triangle -pe object.1' reads a PSLG from object.1.poly (and possibly
+  object.1.node, if the vertices are omitted from object.1.poly) and writes
+  its constrained Delaunay triangulation to object.2.node and object.2.ele.
+  The segments are copied to object.2.poly, and all edges are written to
+  object.2.edge.
+
+  `triangle -pq31.5a.1 object' reads a PSLG from object.poly (and possibly
+  object.node), generates a mesh whose angles are all between 31.5 and 117
+  degrees and whose triangles all have areas of 0.1 or less, and writes the
+  mesh to object.1.node and object.1.ele.  Each segment may be broken up
+  into multiple subsegments; these are written to object.1.poly.
+
+  Here is a sample file `box.poly' describing a square with a square hole:
+
+    # A box with eight vertices in 2D, no attributes, one boundary marker.
+    8 2 0 1
+     # Outer box has these vertices:
+     1   0 0   0
+     2   0 3   0
+     3   3 0   0
+     4   3 3   33     # A special marker for this vertex.
+     # Inner square has these vertices:
+     5   1 1   0
+     6   1 2   0
+     7   2 1   0
+     8   2 2   0
+    # Five segments with boundary markers.
+    5 1
+     1   1 2   5      # Left side of outer box.
+     # Square hole has these segments:
+     2   5 7   0
+     3   7 8   0
+     4   8 6   10
+     5   6 5   0
+    # One hole in the middle of the inner square.
+    1
+     1   1.5 1.5
+
+  Note that some segments are missing from the outer square, so you must
+  use the `-c' switch.  After `triangle -pqc box.poly', here is the output
+  file `box.1.node', with twelve vertices.  The last four vertices were
+  added to meet the angle constraint.  Vertices 1, 2, and 9 have markers
+  from segment 1.  Vertices 6 and 8 have markers from segment 4.  All the
+  other vertices but 4 have been marked to indicate that they lie on a
+  boundary.
+
+    12  2  0  1
+       1    0   0      5
+       2    0   3      5
+       3    3   0      1
+       4    3   3     33
+       5    1   1      1
+       6    1   2     10
+       7    2   1      1
+       8    2   2     10
+       9    0   1.5    5
+      10    1.5   0    1
+      11    3   1.5    1
+      12    1.5   3    1
+    # Generated by triangle -pqc box.poly
+
+  Here is the output file `box.1.ele', with twelve triangles.
+
+    12  3  0
+       1     5   6   9
+       2    10   3   7
+       3     6   8  12
+       4     9   1   5
+       5     6   2   9
+       6     7   3  11
+       7    11   4   8
+       8     7   5  10
+       9    12   2   6
+      10     8   7  11
+      11     5   1  10
+      12     8   4  12
+    # Generated by triangle -pqc box.poly
+
+  Here is the output file `box.1.poly'.  Note that segments have been added
+  to represent the convex hull, and some segments have been subdivided by
+  newly added vertices.  Note also that <# of vertices> is set to zero to
+  indicate that the vertices should be read from the .node file.
+
+    0  2  0  1
+    12  1
+       1     1   9     5
+       2     5   7     1
+       3     8   7     1
+       4     6   8    10
+       5     5   6     1
+       6     3  10     1
+       7     4  11     1
+       8     2  12     1
+       9     9   2     5
+      10    10   1     1
+      11    11   3     1
+      12    12   4     1
+    1
+       1   1.5 1.5
+    # Generated by triangle -pqc box.poly
+
+Refinement and Area Constraints:
+
+  The -r switch causes a mesh (.node and .ele files) to be read and
+  refined.  If the -p switch is also used, a .poly file is read and used to
+  specify edges that are constrained and cannot be eliminated (although
+  they can be subdivided into smaller edges) by the refinement process.
+
+  When you refine a mesh, you generally want to impose tighter constraints.
+  One way to accomplish this is to use -q with a larger angle, or -a
+  followed by a smaller area than you used to generate the mesh you are
+  refining.  Another way to do this is to create an .area file, which
+  specifies a maximum area for each triangle, and use the -a switch
+  (without a number following).  Each triangle's area constraint is applied
+  to that triangle.  Area constraints tend to diffuse as the mesh is
+  refined, so if there are large variations in area constraint between
+  adjacent triangles, you may not get the results you want.  In that case,
+  consider instead using the -u switch and writing a C procedure that
+  determines which triangles are too large.
+
+  If you are refining a mesh composed of linear (three-node) elements, the
+  output mesh contains all the nodes present in the input mesh, in the same
+  order, with new nodes added at the end of the .node file.  However, the
+  refinement is not hierarchical: there is no guarantee that each output
+  element is contained in a single input element.  Often, an output element
+  can overlap two or three input elements, and some input edges are not
+  present in the output mesh.  Hence, a sequence of refined meshes forms a
+  hierarchy of nodes, but not a hierarchy of elements.  If you refine a
+  mesh of higher-order elements, the hierarchical property applies only to
+  the nodes at the corners of an element; the midpoint nodes on each edge
+  are discarded before the mesh is refined.
+
+  Maximum area constraints in .poly files operate differently from those in
+  .area files.  A maximum area in a .poly file applies to the whole
+  (segment-bounded) region in which a point falls, whereas a maximum area
+  in an .area file applies to only one triangle.  Area constraints in .poly
+  files are used only when a mesh is first generated, whereas area
+  constraints in .area files are used only to refine an existing mesh, and
+  are typically based on a posteriori error estimates resulting from a
+  finite element simulation on that mesh.
+
+  `triangle -rq25 object.1' reads object.1.node and object.1.ele, then
+  refines the triangulation to enforce a 25 degree minimum angle, and then
+  writes the refined triangulation to object.2.node and object.2.ele.
+
+  `triangle -rpaa6.2 z.3' reads z.3.node, z.3.ele, z.3.poly, and z.3.area.
+  After reconstructing the mesh and its subsegments, Triangle refines the
+  mesh so that no triangle has area greater than 6.2, and furthermore the
+  triangles satisfy the maximum area constraints in z.3.area.  No angle
+  bound is imposed at all.  The output is written to z.4.node, z.4.ele, and
+  z.4.poly.
+
+  The sequence `triangle -qa1 x', `triangle -rqa.3 x.1', `triangle -rqa.1
+  x.2' creates a sequence of successively finer meshes x.1, x.2, and x.3,
+  suitable for multigrid.
+
+Convex Hulls and Mesh Boundaries:
+
+  If the input is a vertex set (not a PSLG), Triangle produces its convex
+  hull as a by-product in the output .poly file if you use the -c switch.
+  There are faster algorithms for finding a two-dimensional convex hull
+  than triangulation, of course, but this one comes for free.
+
+  If the input is an unconstrained mesh (you are using the -r switch but
+  not the -p switch), Triangle produces a list of its boundary edges
+  (including hole boundaries) as a by-product when you use the -c switch.
+  If you also use the -p switch, the output .poly file contains all the
+  segments from the input .poly file as well.
+
+Voronoi Diagrams:
+
+  The -v switch produces a Voronoi diagram, in files suffixed .v.node and
+  .v.edge.  For example, `triangle -v points' reads points.node, produces
+  its Delaunay triangulation in points.1.node and points.1.ele, and
+  produces its Voronoi diagram in points.1.v.node and points.1.v.edge.  The
+  .v.node file contains a list of all Voronoi vertices, and the .v.edge
+  file contains a list of all Voronoi edges, some of which may be infinite
+  rays.  (The choice of filenames makes it easy to run the set of Voronoi
+  vertices through Triangle, if so desired.)
+
+  This implementation does not use exact arithmetic to compute the Voronoi
+  vertices, and does not check whether neighboring vertices are identical.
+  Be forewarned that if the Delaunay triangulation is degenerate or
+  near-degenerate, the Voronoi diagram may have duplicate vertices or
+  crossing edges.
+
+  The result is a valid Voronoi diagram only if Triangle's output is a true
+  Delaunay triangulation.  The Voronoi output is usually meaningless (and
+  may contain crossing edges and other pathology) if the output is a CDT or
+  CCDT, or if it has holes or concavities.  If the triangulated domain is
+  convex and has no holes, you can use -D switch to force Triangle to
+  construct a conforming Delaunay triangulation instead of a CCDT, so the
+  Voronoi diagram will be valid.
+
+Mesh Topology:
+
+  You may wish to know which triangles are adjacent to a certain Delaunay
+  edge in an .edge file, which Voronoi cells are adjacent to a certain
+  Voronoi edge in a .v.edge file, or which Voronoi cells are adjacent to
+  each other.  All of this information can be found by cross-referencing
+  output files with the recollection that the Delaunay triangulation and
+  the Voronoi diagram are planar duals.
+
+  Specifically, edge i of an .edge file is the dual of Voronoi edge i of
+  the corresponding .v.edge file, and is rotated 90 degrees counterclock-
+  wise from the Voronoi edge.  Triangle j of an .ele file is the dual of
+  vertex j of the corresponding .v.node file.  Voronoi cell k is the dual
+  of vertex k of the corresponding .node file.
+
+  Hence, to find the triangles adjacent to a Delaunay edge, look at the
+  vertices of the corresponding Voronoi edge.  If the endpoints of a
+  Voronoi edge are Voronoi vertices 2 and 6 respectively, then triangles 2
+  and 6 adjoin the left and right sides of the corresponding Delaunay edge,
+  respectively.  To find the Voronoi cells adjacent to a Voronoi edge, look
+  at the endpoints of the corresponding Delaunay edge.  If the endpoints of
+  a Delaunay edge are input vertices 7 and 12, then Voronoi cells 7 and 12
+  adjoin the right and left sides of the corresponding Voronoi edge,
+  respectively.  To find which Voronoi cells are adjacent to each other,
+  just read the list of Delaunay edges.
+
+  Triangle does not write a list of the edges adjoining each Voronoi cell,
+  but you can reconstructed it straightforwardly.  For instance, to find
+  all the edges of Voronoi cell 1, search the output .edge file for every
+  edge that has input vertex 1 as an endpoint.  The corresponding dual
+  edges in the output .v.edge file form the boundary of Voronoi cell 1.
+
+  For each Voronoi vertex, the .neigh file gives a list of the three
+  Voronoi vertices attached to it.  You might find this more convenient
+  than the .v.edge file.
+
+Quadratic Elements:
+
+  Triangle generates meshes with subparametric quadratic elements if the
+  -o2 switch is specified.  Quadratic elements have six nodes per element,
+  rather than three.  `Subparametric' means that the edges of the triangles
+  are always straight, so that subparametric quadratic elements are
+  geometrically identical to linear elements, even though they can be used
+  with quadratic interpolating functions.  The three extra nodes of an
+  element fall at the midpoints of the three edges, with the fourth, fifth,
+  and sixth nodes appearing opposite the first, second, and third corners
+  respectively.
+
+Domains with Small Angles:
+
+  If two input segments adjoin each other at a small angle, clearly the -q
+  switch cannot remove the small angle.  Moreover, Triangle may have no
+  choice but to generate additional triangles whose smallest angles are
+  smaller than the specified bound.  However, these triangles only appear
+  between input segments separated by small angles.  Moreover, if you
+  request a minimum angle of theta degrees, Triangle will generally produce
+  no angle larger than 180 - 2 theta, even if it is forced to compromise on
+  the minimum angle.
+
+Statistics:
+
+  After generating a mesh, Triangle prints a count of entities in the
+  output mesh, including the number of vertices, triangles, edges, exterior
+  boundary edges (i.e. subsegments on the boundary of the triangulation,
+  including hole boundaries), interior boundary edges (i.e. subsegments of
+  input segments not on the boundary), and total subsegments.  If you've
+  forgotten the statistics for an existing mesh, run Triangle on that mesh
+  with the -rNEP switches to read the mesh and print the statistics without
+  writing any files.  Use -rpNEP if you've got a .poly file for the mesh.
+
+  The -V switch produces extended statistics, including a rough estimate
+  of memory use, the number of calls to geometric predicates, and
+  histograms of the angles and the aspect ratios of the triangles in the
+  mesh.
+
+Exact Arithmetic:
+
+  Triangle uses adaptive exact arithmetic to perform what computational
+  geometers call the `orientation' and `incircle' tests.  If the floating-
+  point arithmetic of your machine conforms to the IEEE 754 standard (as
+  most workstations do), and does not use extended precision internal
+  floating-point registers, then your output is guaranteed to be an
+  absolutely true Delaunay or constrained Delaunay triangulation, roundoff
+  error notwithstanding.  The word `adaptive' implies that these arithmetic
+  routines compute the result only to the precision necessary to guarantee
+  correctness, so they are usually nearly as fast as their approximate
+  counterparts.
+
+  May CPUs, including Intel x86 processors, have extended precision
+  floating-point registers.  These must be reconfigured so their precision
+  is reduced to memory precision.  Triangle does this if it is compiled
+  correctly.  See the makefile for details.
+
+  The exact tests can be disabled with the -X switch.  On most inputs, this
+  switch reduces the computation time by about eight percent--it's not
+  worth the risk.  There are rare difficult inputs (having many collinear
+  and cocircular vertices), however, for which the difference in speed
+  could be a factor of two.  Be forewarned that these are precisely the
+  inputs most likely to cause errors if you use the -X switch.  Hence, the
+  -X switch is not recommended.
+
+  Unfortunately, the exact tests don't solve every numerical problem.
+  Exact arithmetic is not used to compute the positions of new vertices,
+  because the bit complexity of vertex coordinates would grow without
+  bound.  Hence, segment intersections aren't computed exactly; in very
+  unusual cases, roundoff error in computing an intersection point might
+  actually lead to an inverted triangle and an invalid triangulation.
+  (This is one reason to specify your own intersection points in your .poly
+  files.)  Similarly, exact arithmetic is not used to compute the vertices
+  of the Voronoi diagram.
+
+  Another pair of problems not solved by the exact arithmetic routines is
+  underflow and overflow.  If Triangle is compiled for double precision
+  arithmetic, I believe that Triangle's geometric predicates work correctly
+  if the exponent of every input coordinate falls in the range [-148, 201].
+  Underflow can silently prevent the orientation and incircle tests from
+  being performed exactly, while overflow typically causes a floating
+  exception.
+
+Calling Triangle from Another Program:
+
+  Read the file triangle.h for details.
+
+Troubleshooting:
+
+  Please read this section before mailing me bugs.
+
+  `My output mesh has no triangles!'
+
+    If you're using a PSLG, you've probably failed to specify a proper set
+    of bounding segments, or forgotten to use the -c switch.  Or you may
+    have placed a hole badly, thereby eating all your triangles.  To test
+    these possibilities, try again with the -c and -O switches.
+    Alternatively, all your input vertices may be collinear, in which case
+    you can hardly expect to triangulate them.
+
+  `Triangle doesn't terminate, or just crashes.'
+
+    Bad things can happen when triangles get so small that the distance
+    between their vertices isn't much larger than the precision of your
+    machine's arithmetic.  If you've compiled Triangle for single-precision
+    arithmetic, you might do better by recompiling it for double-precision.
+    Then again, you might just have to settle for more lenient constraints
+    on the minimum angle and the maximum area than you had planned.
+
+    You can minimize precision problems by ensuring that the origin lies
+    inside your vertex set, or even inside the densest part of your
+    mesh.  If you're triangulating an object whose x-coordinates all fall
+    between 6247133 and 6247134, you're not leaving much floating-point
+    precision for Triangle to work with.
+
+    Precision problems can occur covertly if the input PSLG contains two
+    segments that meet (or intersect) at an extremely small angle, or if
+    such an angle is introduced by the -c switch.  If you don't realize
+    that a tiny angle is being formed, you might never discover why
+    Triangle is crashing.  To check for this possibility, use the -S switch
+    (with an appropriate limit on the number of Steiner points, found by
+    trial-and-error) to stop Triangle early, and view the output .poly file
+    with Show Me (described below).  Look carefully for regions where dense
+    clusters of vertices are forming and for small angles between segments.
+    Zoom in closely, as such segments might look like a single segment from
+    a distance.
+
+    If some of the input values are too large, Triangle may suffer a
+    floating exception due to overflow when attempting to perform an
+    orientation or incircle test.  (Read the section on exact arithmetic
+    above.)  Again, I recommend compiling Triangle for double (rather
+    than single) precision arithmetic.
+
+    Unexpected problems can arise if you use quality meshing (-q, -a, or
+    -u) with an input that is not segment-bounded--that is, if your input
+    is a vertex set, or you're using the -c switch.  If the convex hull of
+    your input vertices has collinear vertices on its boundary, an input
+    vertex that you think lies on the convex hull might actually lie just
+    inside the convex hull.  If so, the vertex and the nearby convex hull
+    edge form an extremely thin triangle.  When Triangle tries to refine
+    the mesh to enforce angle and area constraints, Triangle might generate
+    extremely tiny triangles, or it might fail because of insufficient
+    floating-point precision.
+
+  `The numbering of the output vertices doesn't match the input vertices.'
+
+    You may have had duplicate input vertices, or you may have eaten some
+    of your input vertices with a hole, or by placing them outside the area
+    enclosed by segments.  In any case, you can solve the problem by not
+    using the -j switch.
+
+  `Triangle executes without incident, but when I look at the resulting
+  mesh, it has overlapping triangles or other geometric inconsistencies.'
+
+    If you select the -X switch, Triangle occasionally makes mistakes due
+    to floating-point roundoff error.  Although these errors are rare,
+    don't use the -X switch.  If you still have problems, please report the
+    bug.
+
+  `Triangle executes without incident, but when I look at the resulting
+  Voronoi diagram, it has overlapping edges or other geometric
+  inconsistencies.'
+
+    If your input is a PSLG (-p), you can only expect a meaningful Voronoi
+    diagram if the domain you are triangulating is convex and free of
+    holes, and you use the -D switch to construct a conforming Delaunay
+    triangulation (instead of a CDT or CCDT).
+
+  Strange things can happen if you've taken liberties with your PSLG.  Do
+  you have a vertex lying in the middle of a segment?  Triangle sometimes
+  copes poorly with that sort of thing.  Do you want to lay out a collinear
+  row of evenly spaced, segment-connected vertices?  Have you simply
+  defined one long segment connecting the leftmost vertex to the rightmost
+  vertex, and a bunch of vertices lying along it?  This method occasionally
+  works, especially with horizontal and vertical lines, but often it
+  doesn't, and you'll have to connect each adjacent pair of vertices with a
+  separate segment.  If you don't like it, tough.
+
+  Furthermore, if you have segments that intersect other than at their
+  endpoints, try not to let the intersections fall extremely close to PSLG
+  vertices or each other.
+
+  If you have problems refining a triangulation not produced by Triangle:
+  Are you sure the triangulation is geometrically valid?  Is it formatted
+  correctly for Triangle?  Are the triangles all listed so the first three
+  vertices are their corners in counterclockwise order?  Are all of the
+  triangles constrained Delaunay?  Triangle's Delaunay refinement algorithm
+  assumes that it starts with a CDT.
+
+Show Me:
+
+  Triangle comes with a separate program named `Show Me', whose primary
+  purpose is to draw meshes on your screen or in PostScript.  Its secondary
+  purpose is to check the validity of your input files, and do so more
+  thoroughly than Triangle does.  Unlike Triangle, Show Me requires that
+  you have the X Windows system.  Sorry, Microsoft Windows users.
+
+Triangle on the Web:
+
+  To see an illustrated version of these instructions, check out
+
+    http://www.cs.cmu.edu/~quake/triangle.html
+
+A Brief Plea:
+
+  If you use Triangle, and especially if you use it to accomplish real
+  work, I would like very much to hear from you.  A short letter or email
+  (to jrs@cs.berkeley.edu) describing how you use Triangle will mean a lot
+  to me.  The more people I know are using this program, the more easily I
+  can justify spending time on improvements, which in turn will benefit
+  you.  Also, I can put you on a list to receive email whenever a new
+  version of Triangle is available.
+
+  If you use a mesh generated by Triangle in a publication, please include
+  an acknowledgment as well.  And please spell Triangle with a capital `T'!
+  If you want to include a citation, use `Jonathan Richard Shewchuk,
+  ``Triangle: Engineering a 2D Quality Mesh Generator and Delaunay
+  Triangulator,'' in Applied Computational Geometry:  Towards Geometric
+  Engineering (Ming C. Lin and Dinesh Manocha, editors), volume 1148 of
+  Lecture Notes in Computer Science, pages 203-222, Springer-Verlag,
+  Berlin, May 1996.  (From the First ACM Workshop on Applied Computational
+  Geometry.)'
+
+Research credit:
+
+  Of course, I can take credit for only a fraction of the ideas that made
+  this mesh generator possible.  Triangle owes its existence to the efforts
+  of many fine computational geometers and other researchers, including
+  Marshall Bern, L. Paul Chew, Kenneth L. Clarkson, Boris Delaunay, Rex A.
+  Dwyer, David Eppstein, Steven Fortune, Leonidas J. Guibas, Donald E.
+  Knuth, Charles L. Lawson, Der-Tsai Lee, Gary L. Miller, Ernst P. Mucke,
+  Steven E. Pav, Douglas M. Priest, Jim Ruppert, Isaac Saias, Bruce J.
+  Schachter, Micha Sharir, Peter W. Shor, Daniel D. Sleator, Jorge Stolfi,
+  Robert E. Tarjan, Alper Ungor, Christopher J. Van Wyk, Noel J.
+  Walkington, and Binhai Zhu.  See the comments at the beginning of the
+  source code for references.
+
+)");
+
   triexit(0);
 }
 
@@ -3286,15 +2669,7 @@ void internalerror()
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void parsecommandline(int argc, char **argv, struct behavior *b)
-#else /* not ANSI_DECLARATORS */
-void parsecommandline(argc, argv, b)
-int argc;
-char **argv;
-struct behavior *b;
-#endif /* not ANSI_DECLARATORS */
-
 {
 #ifdef TRILIBRARY
 #define STARTINDEX 0
@@ -3353,7 +2728,7 @@ struct behavior *b;
               k++;
             }
             workstring[k] = '\0';
-            b->minangle = (REAL) strtod(workstring, (char **) NULL);
+            b->minangle = (REAL) strtod(workstring, nullptr);
 	  } else {
             b->minangle = 20.0;
 	  }
@@ -3371,7 +2746,7 @@ struct behavior *b;
               k++;
             }
             workstring[k] = '\0';
-            b->maxarea = (REAL) strtod(workstring, (char **) NULL);
+            b->maxarea = (REAL) strtod(workstring, nullptr);
             if (b->maxarea <= 0.0) {
               printf("Error:  Maximum area must be greater than zero.\n");
               triexit(1);
@@ -3668,86 +3043,78 @@ struct behavior *b;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void printtriangle(struct mesh *m, struct behavior *b, struct otri *t)
-#else /* not ANSI_DECLARATORS */
-void printtriangle(m, b, t)
-struct mesh *m;
-struct behavior *b;
-struct otri *t;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct otri printtri;
   struct osub printsh;
   vertex printvertex;
 
-  printf("triangle x%lx with orientation %d:\n", (unsigned long) t->tri,
+  printf("triangle %p with orientation %d:\n", t->tri,
          t->orient);
   decode(t->tri[0], printtri);
   if (printtri.tri == m->dummytri) {
     printf("    [0] = Outer space\n");
   } else {
-    printf("    [0] = x%lx  %d\n", (unsigned long) printtri.tri,
+    printf("    [0] = %p  %d\n", printtri.tri,
            printtri.orient);
   }
   decode(t->tri[1], printtri);
   if (printtri.tri == m->dummytri) {
     printf("    [1] = Outer space\n");
   } else {
-    printf("    [1] = x%lx  %d\n", (unsigned long) printtri.tri,
+    printf("    [1] = %p  %d\n", printtri.tri,
            printtri.orient);
   }
   decode(t->tri[2], printtri);
   if (printtri.tri == m->dummytri) {
     printf("    [2] = Outer space\n");
   } else {
-    printf("    [2] = x%lx  %d\n", (unsigned long) printtri.tri,
+    printf("    [2] = %p  %d\n", printtri.tri,
            printtri.orient);
   }
 
   org(*t, printvertex);
-  if (printvertex == (vertex) NULL)
-    printf("    Origin[%d] = NULL\n", (t->orient + 1) % 3 + 3);
+  if (printvertex == nullptr)
+    printf("    Origin[%d] = nullptr\n", (t->orient + 1) % 3 + 3);
   else
-    printf("    Origin[%d] = x%lx  (%.12g, %.12g)\n",
-           (t->orient + 1) % 3 + 3, (unsigned long) printvertex,
+    printf("    Origin[%d] = %p  (%.12g, %.12g)\n",
+           (t->orient + 1) % 3 + 3, printvertex,
            printvertex[0], printvertex[1]);
   dest(*t, printvertex);
-  if (printvertex == (vertex) NULL)
-    printf("    Dest  [%d] = NULL\n", (t->orient + 2) % 3 + 3);
+  if (printvertex == nullptr)
+    printf("    Dest  [%d] = nullptr\n", (t->orient + 2) % 3 + 3);
   else
-    printf("    Dest  [%d] = x%lx  (%.12g, %.12g)\n",
-           (t->orient + 2) % 3 + 3, (unsigned long) printvertex,
+    printf("    Dest  [%d] = %p  (%.12g, %.12g)\n",
+           (t->orient + 2) % 3 + 3, printvertex,
            printvertex[0], printvertex[1]);
   apex(*t, printvertex);
-  if (printvertex == (vertex) NULL)
-    printf("    Apex  [%d] = NULL\n", t->orient + 3);
+  if (printvertex == nullptr)
+    printf("    Apex  [%d] = nullptr\n", t->orient + 3);
   else
-    printf("    Apex  [%d] = x%lx  (%.12g, %.12g)\n",
-           t->orient + 3, (unsigned long) printvertex,
+    printf("    Apex  [%d] = %p  (%.12g, %.12g)\n",
+           t->orient + 3, printvertex,
            printvertex[0], printvertex[1]);
 
   if (b->usesegments) {
     sdecode(t->tri[6], printsh);
     if (printsh.ss != m->dummysub) {
-      printf("    [6] = x%lx  %d\n", (unsigned long) printsh.ss,
+      printf("    [6] = %p  %d\n", printsh.ss,
              printsh.ssorient);
     }
     sdecode(t->tri[7], printsh);
     if (printsh.ss != m->dummysub) {
-      printf("    [7] = x%lx  %d\n", (unsigned long) printsh.ss,
+      printf("    [7] = %p  %d\n", printsh.ss,
              printsh.ssorient);
     }
     sdecode(t->tri[8], printsh);
     if (printsh.ss != m->dummysub) {
-      printf("    [8] = x%lx  %d\n", (unsigned long) printsh.ss,
+      printf("    [8] = %p  %d\n", printsh.ss,
              printsh.ssorient);
     }
   }
 
   if (b->vararea) {
-    printf("    Area constraint:  %.4g\n", areabound(*t));
+    printf("    Area constraint:  %.4g\n", areabound(m, *t));
   }
 }
 
@@ -3762,80 +3129,72 @@ struct otri *t;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void printsubseg(struct mesh *m, struct behavior *b, struct osub *s)
-#else /* not ANSI_DECLARATORS */
-void printsubseg(m, b, s)
-struct mesh *m;
-struct behavior *b;
-struct osub *s;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct osub printsh;
   struct otri printtri;
   vertex printvertex;
 
-  printf("subsegment x%lx with orientation %d and mark %d:\n",
+  printf("subsegment %p with orientation %d and mark %d:\n",
          (unsigned long) s->ss, s->ssorient, mark(*s));
   sdecode(s->ss[0], printsh);
   if (printsh.ss == m->dummysub) {
     printf("    [0] = No subsegment\n");
   } else {
-    printf("    [0] = x%lx  %d\n", (unsigned long) printsh.ss,
+    printf("    [0] = %p  %d\n", printsh.ss,
            printsh.ssorient);
   }
   sdecode(s->ss[1], printsh);
   if (printsh.ss == m->dummysub) {
     printf("    [1] = No subsegment\n");
   } else {
-    printf("    [1] = x%lx  %d\n", (unsigned long) printsh.ss,
+    printf("    [1] = %p  %d\n", printsh.ss,
            printsh.ssorient);
   }
 
   sorg(*s, printvertex);
-  if (printvertex == (vertex) NULL)
-    printf("    Origin[%d] = NULL\n", 2 + s->ssorient);
+  if (printvertex == nullptr)
+    printf("    Origin[%d] = nullptr\n", 2 + s->ssorient);
   else
-    printf("    Origin[%d] = x%lx  (%.12g, %.12g)\n",
-           2 + s->ssorient, (unsigned long) printvertex,
+    printf("    Origin[%d] = %p  (%.12g, %.12g)\n",
+           2 + s->ssorient, printvertex,
            printvertex[0], printvertex[1]);
   sdest(*s, printvertex);
-  if (printvertex == (vertex) NULL)
-    printf("    Dest  [%d] = NULL\n", 3 - s->ssorient);
+  if (printvertex == nullptr)
+    printf("    Dest  [%d] = nullptr\n", 3 - s->ssorient);
   else
-    printf("    Dest  [%d] = x%lx  (%.12g, %.12g)\n",
-           3 - s->ssorient, (unsigned long) printvertex,
+    printf("    Dest  [%d] = %p  (%.12g, %.12g)\n",
+           3 - s->ssorient, printvertex,
            printvertex[0], printvertex[1]);
 
   decode(s->ss[6], printtri);
   if (printtri.tri == m->dummytri) {
     printf("    [6] = Outer space\n");
   } else {
-    printf("    [6] = x%lx  %d\n", (unsigned long) printtri.tri,
+    printf("    [6] = %p  %d\n", printtri.tri,
            printtri.orient);
   }
   decode(s->ss[7], printtri);
   if (printtri.tri == m->dummytri) {
     printf("    [7] = Outer space\n");
   } else {
-    printf("    [7] = x%lx  %d\n", (unsigned long) printtri.tri,
+    printf("    [7] = %p  %d\n", printtri.tri,
            printtri.orient);
   }
 
   segorg(*s, printvertex);
-  if (printvertex == (vertex) NULL)
-    printf("    Segment origin[%d] = NULL\n", 4 + s->ssorient);
+  if (printvertex == nullptr)
+    printf("    Segment origin[%d] = nullptr\n", 4 + s->ssorient);
   else
-    printf("    Segment origin[%d] = x%lx  (%.12g, %.12g)\n",
-           4 + s->ssorient, (unsigned long) printvertex,
+    printf("    Segment origin[%d] = %p  (%.12g, %.12g)\n",
+           4 + s->ssorient, printvertex,
            printvertex[0], printvertex[1]);
   segdest(*s, printvertex);
-  if (printvertex == (vertex) NULL)
-    printf("    Segment dest  [%d] = NULL\n", 5 - s->ssorient);
+  if (printvertex == nullptr)
+    printf("    Segment dest  [%d] = nullptr\n", 5 - s->ssorient);
   else
-    printf("    Segment dest  [%d] = x%lx  (%.12g, %.12g)\n",
-           5 - s->ssorient, (unsigned long) printvertex,
+    printf("    Segment dest  [%d] = %p  (%.12g, %.12g)\n",
+           5 - s->ssorient, printvertex,
            printvertex[0], printvertex[1]);
 }
 
@@ -3856,20 +3215,14 @@ struct osub *s;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void poolzero(struct memorypool *pool)
-#else /* not ANSI_DECLARATORS */
-void poolzero(pool)
-struct memorypool *pool;
-#endif /* not ANSI_DECLARATORS */
-
 {
-  pool->firstblock = (VOID **) NULL;
-  pool->nowblock = (VOID **) NULL;
-  pool->nextitem = (VOID *) NULL;
-  pool->deaditemstack = (VOID *) NULL;
-  pool->pathblock = (VOID **) NULL;
-  pool->pathitem = (VOID *) NULL;
+  pool->firstblock = nullptr;
+  pool->nowblock = nullptr;
+  pool->nextitem = nullptr;
+  pool->deaditemstack = nullptr;
+  pool->pathblock = nullptr;
+  pool->pathitem = nullptr;
   pool->alignbytes = 0;
   pool->itembytes = 0;
   pool->itemsperblock = 0;
@@ -3890,31 +3243,25 @@ struct memorypool *pool;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void poolrestart(struct memorypool *pool)
-#else /* not ANSI_DECLARATORS */
-void poolrestart(pool)
-struct memorypool *pool;
-#endif /* not ANSI_DECLARATORS */
-
 {
-  INT_PTR alignptr = 0;
+  intptr_t alignptr = 0;
 
   pool->items = 0;
   pool->maxitems = 0;
 
   /* Set the currently active block. */
   pool->nowblock = pool->firstblock;
-  /* Find the first item in the pool.  Increment by the size of (VOID *). */
-  alignptr = (INT_PTR) (pool->nowblock + 1);
+  /* Find the first item in the pool.  Increment by the size of (void *). */
+  alignptr = (intptr_t) (pool->nowblock + 1);
   /* Align the item on an `alignbytes'-byte boundary. */
-  pool->nextitem = (VOID *)
-    (alignptr + (INT_PTR) pool->alignbytes -
-     (alignptr % (INT_PTR) pool->alignbytes));
+  pool->nextitem = (void *)
+    (alignptr + (intptr_t) pool->alignbytes -
+     (alignptr % (intptr_t) pool->alignbytes));
   /* There are lots of unallocated items left in this block. */
   pool->unallocateditems = pool->itemsfirstblock;
   /* The stack of deallocated items is empty. */
-  pool->deaditemstack = (VOID *) NULL;
+  pool->deaditemstack = nullptr;
 }
 
 /*****************************************************************************/
@@ -3936,27 +3283,17 @@ struct memorypool *pool;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void poolinit(struct memorypool *pool, int bytecount, int itemcount,
               int firstitemcount, int alignment)
-#else /* not ANSI_DECLARATORS */
-void poolinit(pool, bytecount, itemcount, firstitemcount, alignment)
-struct memorypool *pool;
-int bytecount;
-int itemcount;
-int firstitemcount;
-int alignment;
-#endif /* not ANSI_DECLARATORS */
-
 {
   /* Find the proper alignment, which must be at least as large as:   */
   /*   - The parameter `alignment'.                                   */
-  /*   - sizeof(VOID *), so the stack of dead items can be maintained */
+  /*   - sizeof(void *), so the stack of dead items can be maintained */
   /*       without unaligned accesses.                                */
-  if (alignment > sizeof(VOID *)) {
+  if (alignment > sizeof(void *)) {
     pool->alignbytes = alignment;
   } else {
-    pool->alignbytes = sizeof(VOID *);
+    pool->alignbytes = sizeof(void *);
   }
   pool->itembytes = ((bytecount - 1) / pool->alignbytes + 1) *
                     pool->alignbytes;
@@ -3970,11 +3307,11 @@ int alignment;
   /* Allocate a block of items.  Space for `itemsfirstblock' items and one  */
   /*   pointer (to point to the next block) are allocated, as well as space */
   /*   to ensure alignment of the items.                                    */
-  pool->firstblock = (VOID **)
-    trimalloc(pool->itemsfirstblock * pool->itembytes + (int) sizeof(VOID *) +
+  pool->firstblock = (void **)
+    trimalloc(pool->itemsfirstblock * pool->itembytes + (int) sizeof(void *) +
               pool->alignbytes);
   /* Set the next block pointer to NULL. */
-  *(pool->firstblock) = (VOID *) NULL;
+  *(pool->firstblock) = nullptr;
   poolrestart(pool);
 }
 
@@ -3984,17 +3321,11 @@ int alignment;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void pooldeinit(struct memorypool *pool)
-#else /* not ANSI_DECLARATORS */
-void pooldeinit(pool)
-struct memorypool *pool;
-#endif /* not ANSI_DECLARATORS */
-
 {
-  while (pool->firstblock != (VOID **) NULL) {
-    pool->nowblock = (VOID **) *(pool->firstblock);
-    trifree((VOID *) pool->firstblock);
+  while (pool->firstblock != nullptr) {
+    pool->nowblock = (void **) *(pool->firstblock);
+    trifree((void *) pool->firstblock);
     pool->firstblock = pool->nowblock;
   }
 }
@@ -4005,46 +3336,40 @@ struct memorypool *pool;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
-VOID *poolalloc(struct memorypool *pool)
-#else /* not ANSI_DECLARATORS */
-VOID *poolalloc(pool)
-struct memorypool *pool;
-#endif /* not ANSI_DECLARATORS */
-
+void *poolalloc(struct memorypool *pool)
 {
-  VOID *newitem;
-  VOID **newblock;
-  INT_PTR alignptr = 0;
+  void *newitem;
+  void **newblock;
+  intptr_t alignptr = 0;
 
   /* First check the linked list of dead items.  If the list is not   */
   /*   empty, allocate an item from the list rather than a fresh one. */
-  if (pool->deaditemstack != (VOID *) NULL) {
+  if (pool->deaditemstack != nullptr) {
     newitem = pool->deaditemstack;               /* Take first item in list. */
-    pool->deaditemstack = * (VOID **) pool->deaditemstack;
+    pool->deaditemstack = * (void **) pool->deaditemstack;
   } else {
     /* Check if there are any free items left in the current block. */
     if (pool->unallocateditems == 0) {
       /* Check if another block must be allocated. */
-      if (*(pool->nowblock) == (VOID *) NULL) {
+      if (*(pool->nowblock) == nullptr) {
         /* Allocate a new block of items, pointed to by the previous block. */
-        newblock = (VOID **) trimalloc(pool->itemsperblock * pool->itembytes +
-                                       (int) sizeof(VOID *) +
+        newblock = (void **) trimalloc(pool->itemsperblock * pool->itembytes +
+                                       (int) sizeof(void *) +
                                        pool->alignbytes);
-        *(pool->nowblock) = (VOID *) newblock;
+        *(pool->nowblock) = (void *) newblock;
         /* The next block pointer is NULL. */
-        *newblock = (VOID *) NULL;
+        *newblock = nullptr;
       }
 
       /* Move to the new block. */
-      pool->nowblock = (VOID **) *(pool->nowblock);
+      pool->nowblock = (void **) *(pool->nowblock);
       /* Find the first item in the block.    */
-      /*   Increment by the size of (VOID *). */
-      alignptr = (INT_PTR) (pool->nowblock + 1);
+      /*   Increment by the size of (void *). */
+      alignptr = (intptr_t) (pool->nowblock + 1);
       /* Align the item on an `alignbytes'-byte boundary. */
-      pool->nextitem = (VOID *)
-        (alignptr + (INT_PTR) pool->alignbytes -
-         (alignptr % (INT_PTR) pool->alignbytes));
+      pool->nextitem = (void *)
+        (alignptr + (intptr_t) pool->alignbytes -
+         (alignptr % (intptr_t) pool->alignbytes));
       /* There are lots of unallocated items left in this block. */
       pool->unallocateditems = pool->itemsperblock;
     }
@@ -4052,7 +3377,7 @@ struct memorypool *pool;
     /* Allocate a new item. */
     newitem = pool->nextitem;
     /* Advance `nextitem' pointer to next free item in block. */
-    pool->nextitem = (VOID *) ((char *) pool->nextitem + pool->itembytes);
+    pool->nextitem = (void *) ((char *) pool->nextitem + pool->itembytes);
     pool->unallocateditems--;
     pool->maxitems++;
   }
@@ -4068,17 +3393,10 @@ struct memorypool *pool;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
-void pooldealloc(struct memorypool *pool, VOID *dyingitem)
-#else /* not ANSI_DECLARATORS */
-void pooldealloc(pool, dyingitem)
-struct memorypool *pool;
-VOID *dyingitem;
-#endif /* not ANSI_DECLARATORS */
-
+void pooldealloc(struct memorypool *pool, void *dyingitem)
 {
   /* Push freshly killed item onto stack. */
-  *((VOID **) dyingitem) = pool->deaditemstack;
+  *((void **) dyingitem) = pool->deaditemstack;
   pool->deaditemstack = dyingitem;
   pool->items--;
 }
@@ -4091,24 +3409,18 @@ VOID *dyingitem;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void traversalinit(struct memorypool *pool)
-#else /* not ANSI_DECLARATORS */
-void traversalinit(pool)
-struct memorypool *pool;
-#endif /* not ANSI_DECLARATORS */
-
 {
-  INT_PTR alignptr = 0;
+  intptr_t alignptr = 0;
 
   /* Begin the traversal in the first block. */
   pool->pathblock = pool->firstblock;
-  /* Find the first item in the block.  Increment by the size of (VOID *). */
-  alignptr = (INT_PTR) (pool->pathblock + 1);
+  /* Find the first item in the block.  Increment by the size of (void *). */
+  alignptr = (intptr_t) (pool->pathblock + 1);
   /* Align with item on an `alignbytes'-byte boundary. */
-  pool->pathitem = (VOID *)
-    (alignptr + (INT_PTR) pool->alignbytes -
-     (alignptr % (INT_PTR) pool->alignbytes));
+  pool->pathitem = (void *)
+    (alignptr + (intptr_t) pool->alignbytes -
+     (alignptr % (intptr_t) pool->alignbytes));
   /* Set the number of items left in the current block. */
   pool->pathitemsleft = pool->itemsfirstblock;
 }
@@ -4127,39 +3439,33 @@ struct memorypool *pool;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
-VOID *traverse(struct memorypool *pool)
-#else /* not ANSI_DECLARATORS */
-VOID *traverse(pool)
-struct memorypool *pool;
-#endif /* not ANSI_DECLARATORS */
-
+void *traverse(struct memorypool *pool)
 {
-  VOID *newitem;
-  INT_PTR alignptr = 0;
+  void *newitem;
+  intptr_t alignptr = 0;
 
   /* Stop upon exhausting the list of items. */
   if (pool->pathitem == pool->nextitem) {
-    return (VOID *) NULL;
+    return nullptr;
   }
 
   /* Check whether any untraversed items remain in the current block. */
   if (pool->pathitemsleft == 0) {
     /* Find the next block. */
-    pool->pathblock = (VOID **) *(pool->pathblock);
-    /* Find the first item in the block.  Increment by the size of (VOID *). */
-    alignptr = (INT_PTR) (pool->pathblock + 1);
+    pool->pathblock = (void **) *(pool->pathblock);
+    /* Find the first item in the block.  Increment by the size of (void *). */
+    alignptr = (intptr_t) (pool->pathblock + 1);
     /* Align with item on an `alignbytes'-byte boundary. */
-    pool->pathitem = (VOID *)
-      (alignptr + (INT_PTR) pool->alignbytes -
-       (alignptr % (INT_PTR) pool->alignbytes));
+    pool->pathitem = (void *)
+      (alignptr + (intptr_t) pool->alignbytes -
+       (alignptr % (intptr_t) pool->alignbytes));
     /* Set the number of items left in the current block. */
     pool->pathitemsleft = pool->itemsperblock;
   }
 
   newitem = pool->pathitem;
   /* Find the next item in the block. */
-  pool->pathitem = (VOID *) ((char *) pool->pathitem + pool->itembytes);
+  pool->pathitem = (void *) ((char *) pool->pathitem + pool->itembytes);
   pool->pathitemsleft--;
   return newitem;
 }
@@ -4192,28 +3498,19 @@ struct memorypool *pool;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void dummyinit(struct mesh *m, struct behavior *b, int trianglebytes,
                int subsegbytes)
-#else /* not ANSI_DECLARATORS */
-void dummyinit(m, b, trianglebytes, subsegbytes)
-struct mesh *m;
-struct behavior *b;
-int trianglebytes;
-int subsegbytes;
-#endif /* not ANSI_DECLARATORS */
-
 {
-  INT_PTR alignptr = 0;
+  intptr_t alignptr = 0;
 
   /* Set up `dummytri', the `triangle' that occupies "outer space." */
   m->dummytribase = (triangle *) trimalloc(trianglebytes +
                                            m->triangles.alignbytes);
   /* Align `dummytri' on a `triangles.alignbytes'-byte boundary. */
-  alignptr = (INT_PTR) m->dummytribase;
+  alignptr = (intptr_t) m->dummytribase;
   m->dummytri = (triangle *)
-    (alignptr + (INT_PTR) m->triangles.alignbytes -
-     (alignptr % (INT_PTR) m->triangles.alignbytes));
+    (alignptr + (intptr_t) m->triangles.alignbytes -
+     (alignptr % (intptr_t) m->triangles.alignbytes));
   /* Initialize the three adjoining triangles to be "outer space."  These  */
   /*   will eventually be changed by various bonding operations, but their */
   /*   values don't really matter, as long as they can legally be          */
@@ -4222,9 +3519,9 @@ int subsegbytes;
   m->dummytri[1] = (triangle) m->dummytri;
   m->dummytri[2] = (triangle) m->dummytri;
   /* Three NULL vertices. */
-  m->dummytri[3] = (triangle) NULL;
-  m->dummytri[4] = (triangle) NULL;
-  m->dummytri[5] = (triangle) NULL;
+  m->dummytri[3] = nullptr;
+  m->dummytri[4] = nullptr;
+  m->dummytri[5] = nullptr;
 
   if (b->usesegments) {
     /* Set up `dummysub', the omnipresent subsegment pointed to by any */
@@ -4233,10 +3530,10 @@ int subsegbytes;
     m->dummysubbase = (subseg *) trimalloc(subsegbytes +
                                            m->subsegs.alignbytes);
     /* Align `dummysub' on a `subsegs.alignbytes'-byte boundary. */
-    alignptr = (INT_PTR) m->dummysubbase;
+    alignptr = (intptr_t) m->dummysubbase;
     m->dummysub = (subseg *)
-      (alignptr + (INT_PTR) m->subsegs.alignbytes -
-       (alignptr % (INT_PTR) m->subsegs.alignbytes));
+      (alignptr + (intptr_t) m->subsegs.alignbytes -
+       (alignptr % (intptr_t) m->subsegs.alignbytes));
     /* Initialize the two adjoining subsegments to be the omnipresent      */
     /*   subsegment.  These will eventually be changed by various bonding  */
     /*   operations, but their values don't really matter, as long as they */
@@ -4244,10 +3541,10 @@ int subsegbytes;
     m->dummysub[0] = (subseg) m->dummysub;
     m->dummysub[1] = (subseg) m->dummysub;
     /* Four NULL vertices. */
-    m->dummysub[2] = (subseg) NULL;
-    m->dummysub[3] = (subseg) NULL;
-    m->dummysub[4] = (subseg) NULL;
-    m->dummysub[5] = (subseg) NULL;
+    m->dummysub[2] = nullptr;
+    m->dummysub[3] = nullptr;
+    m->dummysub[4] = nullptr;
+    m->dummysub[5] = nullptr;
     /* Initialize the two adjoining triangles to be "outer space." */
     m->dummysub[6] = (subseg) m->dummytri;
     m->dummysub[7] = (subseg) m->dummytri;
@@ -4272,14 +3569,7 @@ int subsegbytes;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void initializevertexpool(struct mesh *m, struct behavior *b)
-#else /* not ANSI_DECLARATORS */
-void initializevertexpool(m, b)
-struct mesh *m;
-struct behavior *b;
-#endif /* not ANSI_DECLARATORS */
-
 {
   int vertexsize;
 
@@ -4315,14 +3605,7 @@ struct behavior *b;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void initializetrisubpools(struct mesh *m, struct behavior *b)
-#else /* not ANSI_DECLARATORS */
-void initializetrisubpools(m, b)
-struct mesh *m;
-struct behavior *b;
-#endif /* not ANSI_DECLARATORS */
-
 {
   int trisize;
 
@@ -4382,19 +3665,12 @@ struct behavior *b;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void triangledealloc(struct mesh *m, triangle *dyingtriangle)
-#else /* not ANSI_DECLARATORS */
-void triangledealloc(m, dyingtriangle)
-struct mesh *m;
-triangle *dyingtriangle;
-#endif /* not ANSI_DECLARATORS */
-
 {
   /* Mark the triangle as dead.  This makes it possible to detect dead */
   /*   triangles when traversing the list of all triangles.            */
   killtri(dyingtriangle);
-  pooldealloc(&m->triangles, (VOID *) dyingtriangle);
+  pooldealloc(&m->triangles, (void *) dyingtriangle);
 }
 
 /*****************************************************************************/
@@ -4403,20 +3679,14 @@ triangle *dyingtriangle;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 triangle *triangletraverse(struct mesh *m)
-#else /* not ANSI_DECLARATORS */
-triangle *triangletraverse(m)
-struct mesh *m;
-#endif /* not ANSI_DECLARATORS */
-
 {
   triangle *newtriangle;
 
   do {
     newtriangle = (triangle *) traverse(&m->triangles);
-    if (newtriangle == (triangle *) NULL) {
-      return (triangle *) NULL;
+    if (newtriangle == nullptr) {
+      return nullptr;
     }
   } while (deadtri(newtriangle));                         /* Skip dead ones. */
   return newtriangle;
@@ -4428,19 +3698,12 @@ struct mesh *m;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void subsegdealloc(struct mesh *m, subseg *dyingsubseg)
-#else /* not ANSI_DECLARATORS */
-void subsegdealloc(m, dyingsubseg)
-struct mesh *m;
-subseg *dyingsubseg;
-#endif /* not ANSI_DECLARATORS */
-
 {
   /* Mark the subsegment as dead.  This makes it possible to detect dead */
   /*   subsegments when traversing the list of all subsegments.          */
   killsubseg(dyingsubseg);
-  pooldealloc(&m->subsegs, (VOID *) dyingsubseg);
+  pooldealloc(&m->subsegs, (void *) dyingsubseg);
 }
 
 /*****************************************************************************/
@@ -4449,20 +3712,14 @@ subseg *dyingsubseg;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 subseg *subsegtraverse(struct mesh *m)
-#else /* not ANSI_DECLARATORS */
-subseg *subsegtraverse(m)
-struct mesh *m;
-#endif /* not ANSI_DECLARATORS */
-
 {
   subseg *newsubseg;
 
   do {
     newsubseg = (subseg *) traverse(&m->subsegs);
-    if (newsubseg == (subseg *) NULL) {
-      return (subseg *) NULL;
+    if (newsubseg == nullptr) {
+      return nullptr;
     }
   } while (deadsubseg(newsubseg));                        /* Skip dead ones. */
   return newsubseg;
@@ -4474,19 +3731,12 @@ struct mesh *m;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void vertexdealloc(struct mesh *m, vertex dyingvertex)
-#else /* not ANSI_DECLARATORS */
-void vertexdealloc(m, dyingvertex)
-struct mesh *m;
-vertex dyingvertex;
-#endif /* not ANSI_DECLARATORS */
-
 {
   /* Mark the vertex as dead.  This makes it possible to detect dead */
   /*   vertices when traversing the list of all vertices.            */
-  setvertextype(dyingvertex, DEADVERTEX);
-  pooldealloc(&m->vertices, (VOID *) dyingvertex);
+  setvertextype(m, dyingvertex, DEADVERTEX);
+  pooldealloc(&m->vertices, (void *) dyingvertex);
 }
 
 /*****************************************************************************/
@@ -4495,22 +3745,16 @@ vertex dyingvertex;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 vertex vertextraverse(struct mesh *m)
-#else /* not ANSI_DECLARATORS */
-vertex vertextraverse(m)
-struct mesh *m;
-#endif /* not ANSI_DECLARATORS */
-
 {
   vertex newvertex;
 
   do {
     newvertex = (vertex) traverse(&m->vertices);
-    if (newvertex == (vertex) NULL) {
-      return (vertex) NULL;
+    if (newvertex == nullptr) {
+      return nullptr;
     }
-  } while (vertextype(newvertex) == DEADVERTEX);          /* Skip dead ones. */
+  } while (vertextype(m, newvertex) == DEADVERTEX);          /* Skip dead ones. */
   return newvertex;
 }
 
@@ -4523,19 +3767,12 @@ struct mesh *m;
 
 #ifndef CDT_ONLY
 
-#ifdef ANSI_DECLARATORS
 void badsubsegdealloc(struct mesh *m, struct badsubseg *dyingseg)
-#else /* not ANSI_DECLARATORS */
-void badsubsegdealloc(m, dyingseg)
-struct mesh *m;
-struct badsubseg *dyingseg;
-#endif /* not ANSI_DECLARATORS */
-
 {
   /* Set subsegment's origin to NULL.  This makes it possible to detect dead */
   /*   badsubsegs when traversing the list of all badsubsegs             .   */
-  dyingseg->subsegorg = (vertex) NULL;
-  pooldealloc(&m->badsubsegs, (VOID *) dyingseg);
+  dyingseg->subsegorg = nullptr;
+  pooldealloc(&m->badsubsegs, (void *) dyingseg);
 }
 
 #endif /* not CDT_ONLY */
@@ -4548,22 +3785,16 @@ struct badsubseg *dyingseg;
 
 #ifndef CDT_ONLY
 
-#ifdef ANSI_DECLARATORS
 struct badsubseg *badsubsegtraverse(struct mesh *m)
-#else /* not ANSI_DECLARATORS */
-struct badsubseg *badsubsegtraverse(m)
-struct mesh *m;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct badsubseg *newseg;
 
   do {
     newseg = (struct badsubseg *) traverse(&m->badsubsegs);
-    if (newseg == (struct badsubseg *) NULL) {
-      return (struct badsubseg *) NULL;
+    if (newseg == nullptr) {
+      return nullptr;
     }
-  } while (newseg->subsegorg == (vertex) NULL);           /* Skip dead ones. */
+  } while (newseg->subsegorg == nullptr);           /* Skip dead ones. */
   return newseg;
 }
 
@@ -4581,19 +3812,11 @@ struct mesh *m;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 vertex getvertex(struct mesh *m, struct behavior *b, int number)
-#else /* not ANSI_DECLARATORS */
-vertex getvertex(m, b, number)
-struct mesh *m;
-struct behavior *b;
-int number;
-#endif /* not ANSI_DECLARATORS */
-
 {
-  VOID **getblock;
+  void **getblock;
   char *foundvertex;
-  INT_PTR alignptr = 0;
+  intptr_t alignptr = 0;
   int current;
 
   getblock = m->vertices.firstblock;
@@ -4601,18 +3824,18 @@ int number;
 
   /* Find the right block. */
   if (current + m->vertices.itemsfirstblock <= number) {
-    getblock = (VOID **) *getblock;
+    getblock = (void **) *getblock;
     current += m->vertices.itemsfirstblock;
     while (current + m->vertices.itemsperblock <= number) {
-      getblock = (VOID **) *getblock;
+      getblock = (void **) *getblock;
       current += m->vertices.itemsperblock;
     }
   }
 
   /* Now find the right vertex. */
-  alignptr = (INT_PTR) (getblock + 1);
-  foundvertex = (char *) (alignptr + (INT_PTR) m->vertices.alignbytes -
-                          (alignptr % (INT_PTR) m->vertices.alignbytes));
+  alignptr = (intptr_t) (getblock + 1);
+  foundvertex = (char *) (alignptr + (intptr_t) m->vertices.alignbytes -
+                          (alignptr % (intptr_t) m->vertices.alignbytes));
   return (vertex) (foundvertex + m->vertices.itembytes * (number - current));
 }
 
@@ -4622,20 +3845,13 @@ int number;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void triangledeinit(struct mesh *m, struct behavior *b)
-#else /* not ANSI_DECLARATORS */
-void triangledeinit(m, b)
-struct mesh *m;
-struct behavior *b;
-#endif /* not ANSI_DECLARATORS */
-
 {
   pooldeinit(&m->triangles);
-  trifree((VOID *) m->dummytribase);
+  trifree((void *) m->dummytribase);
   if (b->usesegments) {
     pooldeinit(&m->subsegs);
-    trifree((VOID *) m->dummysubbase);
+    trifree((void *) m->dummysubbase);
   }
   pooldeinit(&m->vertices);
 #ifndef CDT_ONLY
@@ -4663,15 +3879,7 @@ struct behavior *b;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void maketriangle(struct mesh *m, struct behavior *b, struct otri *newotri)
-#else /* not ANSI_DECLARATORS */
-void maketriangle(m, b, newotri)
-struct mesh *m;
-struct behavior *b;
-struct otri *newotri;
-#endif /* not ANSI_DECLARATORS */
-
 {
   int i;
 
@@ -4681,9 +3889,9 @@ struct otri *newotri;
   newotri->tri[1] = (triangle) m->dummytri;
   newotri->tri[2] = (triangle) m->dummytri;
   /* Three NULL vertices. */
-  newotri->tri[3] = (triangle) NULL;
-  newotri->tri[4] = (triangle) NULL;
-  newotri->tri[5] = (triangle) NULL;
+  newotri->tri[3] = nullptr;
+  newotri->tri[4] = nullptr;
+  newotri->tri[5] = nullptr;
   if (b->usesegments) {
     /* Initialize the three adjoining subsegments to be the omnipresent */
     /*   subsegment.                                                    */
@@ -4692,10 +3900,10 @@ struct otri *newotri;
     newotri->tri[8] = (triangle) m->dummysub;
   }
   for (i = 0; i < m->eextras; i++) {
-    setelemattribute(*newotri, i, 0.0);
+    setelemattribute(m, *newotri, i, 0.0);
   }
   if (b->vararea) {
-    setareabound(*newotri, -1.0);
+    setareabound(m, *newotri, -1.0);
   }
 
   newotri->orient = 0;
@@ -4707,14 +3915,7 @@ struct otri *newotri;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void makesubseg(struct mesh *m, struct osub *newsubseg)
-#else /* not ANSI_DECLARATORS */
-void makesubseg(m, newsubseg)
-struct mesh *m;
-struct osub *newsubseg;
-#endif /* not ANSI_DECLARATORS */
-
 {
   newsubseg->ss = (subseg *) poolalloc(&m->subsegs);
   /* Initialize the two adjoining subsegments to be the omnipresent */
@@ -4722,10 +3923,10 @@ struct osub *newsubseg;
   newsubseg->ss[0] = (subseg) m->dummysub;
   newsubseg->ss[1] = (subseg) m->dummysub;
   /* Four NULL vertices. */
-  newsubseg->ss[2] = (subseg) NULL;
-  newsubseg->ss[3] = (subseg) NULL;
-  newsubseg->ss[4] = (subseg) NULL;
-  newsubseg->ss[5] = (subseg) NULL;
+  newsubseg->ss[2] = nullptr;
+  newsubseg->ss[3] = nullptr;
+  newsubseg->ss[4] = nullptr;
+  newsubseg->ss[5] = nullptr;
   /* Initialize the two adjoining triangles to be "outer space." */
   newsubseg->ss[6] = (subseg) m->dummytri;
   newsubseg->ss[7] = (subseg) m->dummytri;
@@ -4965,17 +4166,7 @@ void exactinit()
 /*****************************************************************************/
 
 static
-#ifdef ANSI_DECLARATORS
 int fast_expansion_sum_zeroelim(int elen, REAL *e, int flen, REAL *f, REAL *h)
-#else /* not ANSI_DECLARATORS */
-int fast_expansion_sum_zeroelim(elen, e, flen, f, h)  /* h cannot be e or f. */
-int elen;
-REAL *e;
-int flen;
-REAL *f;
-REAL *h;
-#endif /* not ANSI_DECLARATORS */
-
 {
   REAL Q;
   INEXACT REAL Qnew;
@@ -5059,17 +4250,7 @@ REAL *h;
 /*                                                                           */
 /*****************************************************************************/
 
-static
-#ifdef ANSI_DECLARATORS
 int scale_expansion_zeroelim(int elen, REAL *e, REAL b, REAL *h)
-#else /* not ANSI_DECLARATORS */
-int scale_expansion_zeroelim(elen, e, b, h)   /* e and h cannot be the same. */
-int elen;
-REAL *e;
-REAL b;
-REAL *h;
-#endif /* not ANSI_DECLARATORS */
-
 {
   INEXACT REAL Q, sum;
   REAL hh;
@@ -5117,14 +4298,7 @@ REAL *h;
 /*****************************************************************************/
 
 static
-#ifdef ANSI_DECLARATORS
 REAL estimate(int elen, REAL *e)
-#else /* not ANSI_DECLARATORS */
-REAL estimate(elen, e)
-int elen;
-REAL *e;
-#endif /* not ANSI_DECLARATORS */
-
 {
   REAL Q;
   int eindex;
@@ -5156,16 +4330,7 @@ REAL *e;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 REAL counterclockwiseadapt(vertex pa, vertex pb, vertex pc, REAL detsum)
-#else /* not ANSI_DECLARATORS */
-REAL counterclockwiseadapt(pa, pb, pc, detsum)
-vertex pa;
-vertex pb;
-vertex pc;
-REAL detsum;
-#endif /* not ANSI_DECLARATORS */
-
 {
   INEXACT REAL acx, acy, bcx, bcy;
   REAL acxtail, acytail, bcxtail, bcytail;
@@ -5245,18 +4410,8 @@ REAL detsum;
   return(D[Dlength - 1]);
 }
 
-#ifdef ANSI_DECLARATORS
 REAL counterclockwise(struct mesh *m, struct behavior *b,
                       vertex pa, vertex pb, vertex pc)
-#else /* not ANSI_DECLARATORS */
-REAL counterclockwise(m, b, pa, pb, pc)
-struct mesh *m;
-struct behavior *b;
-vertex pa;
-vertex pb;
-vertex pc;
-#endif /* not ANSI_DECLARATORS */
-
 {
   REAL detleft, detright, det;
   REAL detsum, errbound;
@@ -5315,17 +4470,7 @@ vertex pc;
 /*****************************************************************************/
 
 static
-#ifdef ANSI_DECLARATORS
 REAL incircleadapt(vertex pa, vertex pb, vertex pc, vertex pd, REAL permanent)
-#else /* not ANSI_DECLARATORS */
-REAL incircleadapt(pa, pb, pc, pd, permanent)
-vertex pa;
-vertex pb;
-vertex pc;
-vertex pd;
-REAL permanent;
-#endif /* not ANSI_DECLARATORS */
-
 {
   INEXACT REAL adx, bdx, cdx, ady, bdy, cdy;
   REAL det, errbound;
@@ -5895,19 +5040,8 @@ REAL permanent;
 }
 
 static
-#ifdef ANSI_DECLARATORS
 REAL incircle(struct mesh *m, struct behavior *b,
               vertex pa, vertex pb, vertex pc, vertex pd)
-#else /* not ANSI_DECLARATORS */
-REAL incircle(m, b, pa, pb, pc, pd)
-struct mesh *m;
-struct behavior *b;
-vertex pa;
-vertex pb;
-vertex pc;
-vertex pd;
-#endif /* not ANSI_DECLARATORS */
-
 {
   REAL adx, bdx, cdx, ady, bdy, cdy;
   REAL bdxcdy, cdxbdy, cdxady, adxcdy, adxbdy, bdxady;
@@ -5978,23 +5112,9 @@ vertex pd;
 /*****************************************************************************/
 
 static
-#ifdef ANSI_DECLARATORS
 REAL orient3dadapt(vertex pa, vertex pb, vertex pc, vertex pd,
                    REAL aheight, REAL bheight, REAL cheight, REAL dheight,
                    REAL permanent)
-#else /* not ANSI_DECLARATORS */
-REAL orient3dadapt(pa, pb, pc, pd,
-                   aheight, bheight, cheight, dheight, permanent)
-vertex pa;
-vertex pb;
-vertex pc;
-vertex pd;
-REAL aheight;
-REAL bheight;
-REAL cheight;
-REAL dheight;
-REAL permanent;
-#endif /* not ANSI_DECLARATORS */
 
 {
   INEXACT REAL adx, bdx, cdx, ady, bdy, cdy, adheight, bdheight, cdheight;
@@ -6404,24 +5524,9 @@ REAL permanent;
 }
 
 static
-#ifdef ANSI_DECLARATORS
 REAL orient3d(struct mesh *m, struct behavior *b,
               vertex pa, vertex pb, vertex pc, vertex pd,
               REAL aheight, REAL bheight, REAL cheight, REAL dheight)
-#else /* not ANSI_DECLARATORS */
-REAL orient3d(m, b, pa, pb, pc, pd, aheight, bheight, cheight, dheight)
-struct mesh *m;
-struct behavior *b;
-vertex pa;
-vertex pb;
-vertex pc;
-vertex pd;
-REAL aheight;
-REAL bheight;
-REAL cheight;
-REAL dheight;
-#endif /* not ANSI_DECLARATORS */
-
 {
   REAL adx, bdx, cdx, ady, bdy, cdy, adheight, bdheight, cdheight;
   REAL bdxcdy, cdxbdy, cdxady, adxcdy, adxbdy, bdxady;
@@ -6487,18 +5592,8 @@ REAL dheight;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 REAL nonregular(struct mesh *m, struct behavior *b,
                 vertex pa, vertex pb, vertex pc, vertex pd)
-#else /* not ANSI_DECLARATORS */
-REAL nonregular(m, b, pa, pb, pc, pd)
-struct mesh *m;
-struct behavior *b;
-vertex pa;
-vertex pb;
-vertex pc;
-vertex pd;
-#endif /* not ANSI_DECLARATORS */
 
 {
   if (b->weighted == 0) {
@@ -6528,24 +5623,9 @@ vertex pd;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void findcircumcenter(struct mesh *m, struct behavior *b,
                       vertex torg, vertex tdest, vertex tapex,
                       vertex circumcenter, REAL *xi, REAL *eta, int offcenter)
-#else /* not ANSI_DECLARATORS */
-void findcircumcenter(m, b, torg, tdest, tapex, circumcenter, xi, eta,
-                      offcenter)
-struct mesh *m;
-struct behavior *b;
-vertex torg;
-vertex tdest;
-vertex tapex;
-vertex circumcenter;
-REAL *xi;
-REAL *eta;
-int offcenter;
-#endif /* not ANSI_DECLARATORS */
-
 {
   REAL xdo, ydo, xao, yao;
   REAL dodist, aodist, dadist;
@@ -6642,13 +5722,7 @@ int offcenter;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void triangleinit(struct mesh *m)
-#else /* not ANSI_DECLARATORS */
-void triangleinit(m)
-struct mesh *m;
-#endif /* not ANSI_DECLARATORS */
-
 {
   poolzero(&m->vertices);
   poolzero(&m->triangles);
@@ -6659,7 +5733,7 @@ struct mesh *m;
   poolzero(&m->flipstackers);
   poolzero(&m->splaynodes);
 
-  m->recenttri.tri = (triangle *) NULL; /* No triangle has been visited yet. */
+  m->recenttri.tri = nullptr; /* No triangle has been visited yet. */
   m->undeads = 0;                       /* No eliminated input vertices yet. */
   m->samples = 1;         /* Point location should take at least one sample. */
   m->checksegments = 0;   /* There are no segments in the triangulation yet. */
@@ -6681,13 +5755,7 @@ struct mesh *m;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 unsigned long randomnation(unsigned int choices)
-#else /* not ANSI_DECLARATORS */
-unsigned long randomnation(choices)
-unsigned int choices;
-#endif /* not ANSI_DECLARATORS */
-
 {
   randomseed = (randomseed * 1366l + 150889l) % 714025l;
   return randomseed / (714025l / choices + 1);
@@ -6705,14 +5773,7 @@ unsigned int choices;
 
 #ifndef REDUCED
 
-#ifdef ANSI_DECLARATORS
 void checkmesh(struct mesh *m, struct behavior *b)
-#else /* not ANSI_DECLARATORS */
-void checkmesh(m, b)
-struct mesh *m;
-struct behavior *b;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct otri triangleloop;
   struct otri oppotri, oppooppotri;
@@ -6732,7 +5793,7 @@ struct behavior *b;
   /* Run through the list of triangles, checking each one. */
   traversalinit(&m->triangles);
   triangleloop.tri = triangletraverse(m);
-  while (triangleloop.tri != (triangle *) NULL) {
+  while (triangleloop.tri != nullptr) {
     /* Check all three edges of the triangle. */
     for (triangleloop.orient = 0; triangleloop.orient < 3;
          triangleloop.orient++) {
@@ -6804,14 +5865,7 @@ struct behavior *b;
 
 #ifndef REDUCED
 
-#ifdef ANSI_DECLARATORS
 void checkdelaunay(struct mesh *m, struct behavior *b)
-#else /* not ANSI_DECLARATORS */
-void checkdelaunay(m, b)
-struct mesh *m;
-struct behavior *b;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct otri triangleloop;
   struct otri oppotri;
@@ -6834,7 +5888,7 @@ struct behavior *b;
   /* Run through the list of triangles, checking each one. */
   traversalinit(&m->triangles);
   triangleloop.tri = triangletraverse(m);
-  while (triangleloop.tri != (triangle *) NULL) {
+  while (triangleloop.tri != nullptr) {
     /* Check all three edges of the triangle. */
     for (triangleloop.orient = 0; triangleloop.orient < 3;
          triangleloop.orient++) {
@@ -6914,16 +5968,8 @@ struct behavior *b;
 
 #ifndef CDT_ONLY
 
-#ifdef ANSI_DECLARATORS
 void enqueuebadtriang(struct mesh *m, struct behavior *b,
                       struct badtriang *badtri)
-#else /* not ANSI_DECLARATORS */
-void enqueuebadtriang(m, b, badtri)
-struct mesh *m;
-struct behavior *b;
-struct badtriang *badtri;
-#endif /* not ANSI_DECLARATORS */
-
 {
   REAL length, multiplier;
   int exponent, expincrement;
@@ -6977,7 +6023,7 @@ struct badtriang *badtri;
   }
 
   /* Are we inserting into an empty queue? */
-  if (m->queuefront[queuenumber] == (struct badtriang *) NULL) {
+  if (m->queuefront[queuenumber] == nullptr) {
     /* Yes, we are inserting into an empty queue.     */
     /*   Will this become the highest-priority queue? */
     if (queuenumber > m->firstnonemptyq) {
@@ -6988,7 +6034,7 @@ struct badtriang *badtri;
       /* No, this is not the highest-priority queue. */
       /*   Find the queue with next higher priority. */
       i = queuenumber + 1;
-      while (m->queuefront[i] == (struct badtriang *) NULL) {
+      while (m->queuefront[i] == nullptr) {
         i++;
       }
       /* Mark the newly nonempty queue as following a higher-priority queue. */
@@ -7004,7 +6050,7 @@ struct badtriang *badtri;
   /* Maintain a pointer to the last triangle of the queue. */
   m->queuetail[queuenumber] = badtri;
   /* Newly enqueued bad triangle has no successor in the queue. */
-  badtri->nexttriang = (struct badtriang *) NULL;
+  badtri->nexttriang = nullptr;
 }
 
 #endif /* not CDT_ONLY */
@@ -7020,20 +6066,8 @@ struct badtriang *badtri;
 
 #ifndef CDT_ONLY
 
-#ifdef ANSI_DECLARATORS
 void enqueuebadtri(struct mesh *m, struct behavior *b, struct otri *enqtri,
                    REAL minedge, vertex enqapex, vertex enqorg, vertex enqdest)
-#else /* not ANSI_DECLARATORS */
-void enqueuebadtri(m, b, enqtri, minedge, enqapex, enqorg, enqdest)
-struct mesh *m;
-struct behavior *b;
-struct otri *enqtri;
-REAL minedge;
-vertex enqapex;
-vertex enqorg;
-vertex enqdest;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct badtriang *newbad;
 
@@ -7057,19 +6091,13 @@ vertex enqdest;
 
 #ifndef CDT_ONLY
 
-#ifdef ANSI_DECLARATORS
 struct badtriang *dequeuebadtriang(struct mesh *m)
-#else /* not ANSI_DECLARATORS */
-struct badtriang *dequeuebadtriang(m)
-struct mesh *m;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct badtriang *result;
 
   /* If no queues are nonempty, return NULL. */
   if (m->firstnonemptyq < 0) {
-    return (struct badtriang *) NULL;
+    return nullptr;
   }
   /* Find the first triangle of the highest-priority queue. */
   result = m->queuefront[m->firstnonemptyq];
@@ -7110,16 +6138,8 @@ struct mesh *m;
 
 #ifndef CDT_ONLY
 
-#ifdef ANSI_DECLARATORS
 int checkseg4encroach(struct mesh *m, struct behavior *b,
                       struct osub *testsubseg)
-#else /* not ANSI_DECLARATORS */
-int checkseg4encroach(m, b, testsubseg)
-struct mesh *m;
-struct behavior *b;
-struct osub *testsubseg;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct otri neighbortri;
   struct osub testsym;
@@ -7223,15 +6243,7 @@ struct osub *testsubseg;
 
 #ifndef CDT_ONLY
 
-#ifdef ANSI_DECLARATORS
 void testtriangle(struct mesh *m, struct behavior *b, struct otri *testtri)
-#else /* not ANSI_DECLARATORS */
-void testtriangle(m, b, testtri)
-struct mesh *m;
-struct behavior *b;
-struct otri *testtri;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct otri tri1, tri2;
   struct osub testsub;
@@ -7307,8 +6319,8 @@ struct otri *testtri;
     }
 
     /* Nonpositive area constraints are treated as unconstrained. */
-    if ((b->vararea) && (area > areabound(*testtri)) &&
-        (areabound(*testtri) > 0.0)) {
+    if ((b->vararea) && (area > areabound(m, *testtri)) &&
+        (areabound(m, *testtri) > 0.0)) {
       /* Add this triangle to the list of bad triangles. */
       enqueuebadtri(m, b, testtri, minedge, tapex, torg, tdest);
       return;
@@ -7334,8 +6346,8 @@ struct otri *testtri;
     /*   both lie in segment interiors, equidistant from the apex where    */
     /*   the two segments meet.                                            */
     /* First, check if both points lie in segment interiors.               */
-    if ((vertextype(base1) == SEGMENTVERTEX) &&
-        (vertextype(base2) == SEGMENTVERTEX)) {
+    if ((vertextype(m, base1) == SEGMENTVERTEX) &&
+        (vertextype(m, base2) == SEGMENTVERTEX)) {
       /* Check if both points lie in a common segment.  If they do, the */
       /*   skinny triangle is enqueued to be split as usual.            */
       tspivot(tri1, testsub);
@@ -7358,13 +6370,13 @@ struct otri *testtri;
         segorg(testsub, org2);
         segdest(testsub, dest2);
         /* Check if the two containing segments have an endpoint in common. */
-        joinvertex = (vertex) NULL;
+        joinvertex = nullptr;
         if ((dest1[0] == org2[0]) && (dest1[1] == org2[1])) {
           joinvertex = dest1;
         } else if ((org1[0] == dest2[0]) && (org1[1] == dest2[1])) {
           joinvertex = org1;
         }
-        if (joinvertex != (vertex) NULL) {
+        if (joinvertex != nullptr) {
           /* Compute the distance from the common endpoint (of the two  */
           /*   segments) to each of the endpoints of the shortest edge. */
           dist1 = ((base1[0] - joinvertex[0]) * (base1[0] - joinvertex[0]) +
@@ -7409,14 +6421,7 @@ struct otri *testtri;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void makevertexmap(struct mesh *m, struct behavior *b)
-#else /* not ANSI_DECLARATORS */
-void makevertexmap(m, b)
-struct mesh *m;
-struct behavior *b;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct otri triangleloop;
   vertex triorg;
@@ -7426,12 +6431,12 @@ struct behavior *b;
   }
   traversalinit(&m->triangles);
   triangleloop.tri = triangletraverse(m);
-  while (triangleloop.tri != (triangle *) NULL) {
+  while (triangleloop.tri != nullptr) {
     /* Check all three vertices of the triangle. */
     for (triangleloop.orient = 0; triangleloop.orient < 3;
          triangleloop.orient++) {
       org(triangleloop, triorg);
-      setvertex2tri(triorg, encode(triangleloop));
+      setvertex2tri(m, triorg, encode(triangleloop));
     }
     triangleloop.tri = triangletraverse(m);
   }
@@ -7504,19 +6509,9 @@ struct behavior *b;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 enum locateresult preciselocate(struct mesh *m, struct behavior *b,
                                 vertex searchpoint, struct otri *searchtri,
                                 int stopatsubsegment)
-#else /* not ANSI_DECLARATORS */
-enum locateresult preciselocate(m, b, searchpoint, searchtri, stopatsubsegment)
-struct mesh *m;
-struct behavior *b;
-vertex searchpoint;
-struct otri *searchtri;
-int stopatsubsegment;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct otri backtracktri;
   struct osub checkedge;
@@ -7648,23 +6643,14 @@ int stopatsubsegment;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 enum locateresult locate(struct mesh *m, struct behavior *b,
                          vertex searchpoint, struct otri *searchtri)
-#else /* not ANSI_DECLARATORS */
-enum locateresult locate(m, b, searchpoint, searchtri)
-struct mesh *m;
-struct behavior *b;
-vertex searchpoint;
-struct otri *searchtri;
-#endif /* not ANSI_DECLARATORS */
-
 {
-  VOID **sampleblock;
+  void **sampleblock;
   char *firsttri;
   struct otri sampletri;
   vertex torg, tdest;
-  INT_PTR alignptr = 0;
+  intptr_t alignptr = 0;
   REAL searchdist, dist;
   REAL ahead;
   long samplesperblock, totalsamplesleft, samplesleft;
@@ -7687,7 +6673,7 @@ struct otri *searchtri;
 
   /* If a recently encountered triangle has been recorded and has not been */
   /*   deallocated, test it as a good starting point.                      */
-  if (m->recenttri.tri != (triangle *) NULL) {
+  if (m->recenttri.tri != nullptr) {
     if (!deadtri(m->recenttri.tri)) {
       org(m->recenttri, torg);
       if ((torg[0] == searchpoint[0]) && (torg[1] == searchpoint[1])) {
@@ -7736,11 +6722,11 @@ struct otri *searchtri;
       population = totalpopulation;
     }
     /* Find a pointer to the first triangle in the block. */
-    alignptr = (INT_PTR) (sampleblock + 1);
+    alignptr = (intptr_t) (sampleblock + 1);
     firsttri = (char *) (alignptr +
-                         (INT_PTR) m->triangles.alignbytes -
+                         (intptr_t) m->triangles.alignbytes -
                          (alignptr %
-                          (INT_PTR) m->triangles.alignbytes));
+                          (intptr_t) m->triangles.alignbytes));
 
     /* Choose `samplesleft' randomly sampled triangles in this block. */
     do {
@@ -7766,7 +6752,7 @@ struct otri *searchtri;
     } while ((samplesleft > 0) && (totalsamplesleft > 0));
 
     if (totalsamplesleft > 0) {
-      sampleblock = (VOID **) *sampleblock;
+      sampleblock = (void **) *sampleblock;
       samplesleft = samplesperblock;
       totalpopulation -= population;
       population = TRIPERBLOCK;
@@ -7819,17 +6805,8 @@ struct otri *searchtri;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void insertsubseg(struct mesh *m, struct behavior *b, struct otri *tri,
                   int subsegmark)
-#else /* not ANSI_DECLARATORS */
-void insertsubseg(m, b, tri, subsegmark)
-struct mesh *m;
-struct behavior *b;
-struct otri *tri;             /* Edge at which to insert the new subsegment. */
-int subsegmark;                            /* Marker for the new subsegment. */
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct otri oppotri;
   struct osub newsubseg;
@@ -7840,11 +6817,11 @@ int subsegmark;                            /* Marker for the new subsegment. */
   org(*tri, triorg);
   dest(*tri, tridest);
   /* Mark vertices if possible. */
-  if (vertexmark(triorg) == 0) {
-    setvertexmark(triorg, subsegmark);
+  if (vertexmark(m, triorg) == 0) {
+    setvertexmark(m, triorg, subsegmark);
   }
-  if (vertexmark(tridest) == 0) {
-    setvertexmark(tridest, subsegmark);
+  if (vertexmark(m, tridest) == 0) {
+    setvertexmark(m, tridest, subsegmark);
   }
   /* Check if there's already a subsegment here. */
   tspivot(*tri, newsubseg);
@@ -7923,14 +6900,7 @@ int subsegmark;                            /* Marker for the new subsegment. */
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void flip(struct mesh *m, struct behavior *b, struct otri *flipedge)
-#else /* not ANSI_DECLARATORS */
-void flip(m, b, flipedge)
-struct mesh *m;
-struct behavior *b;
-struct otri *flipedge;                    /* Handle for the triangle abc. */
-#endif /* not ANSI_DECLARATORS */
 
 {
   struct otri botleft, botright;
@@ -7989,22 +6959,22 @@ struct otri *flipedge;                    /* Handle for the triangle abc. */
     tspivot(botright, botrsubseg);
     tspivot(topright, toprsubseg);
     if (toplsubseg.ss == m->dummysub) {
-      tsdissolve(topright);
+      tsdissolve(m, topright);
     } else {
       tsbond(topright, toplsubseg);
     }
     if (botlsubseg.ss == m->dummysub) {
-      tsdissolve(topleft);
+      tsdissolve(m, topleft);
     } else {
       tsbond(topleft, botlsubseg);
     }
     if (botrsubseg.ss == m->dummysub) {
-      tsdissolve(botleft);
+      tsdissolve(m, botleft);
     } else {
       tsbond(botleft, botrsubseg);
     }
     if (toprsubseg.ss == m->dummysub) {
-      tsdissolve(botright);
+      tsdissolve(m, botright);
     } else {
       tsbond(botright, toprsubseg);
     }
@@ -8058,14 +7028,7 @@ struct otri *flipedge;                    /* Handle for the triangle abc. */
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void unflip(struct mesh *m, struct behavior *b, struct otri *flipedge)
-#else /* not ANSI_DECLARATORS */
-void unflip(m, b, flipedge)
-struct mesh *m;
-struct behavior *b;
-struct otri *flipedge;                    /* Handle for the triangle abc. */
-#endif /* not ANSI_DECLARATORS */
 
 {
   struct otri botleft, botright;
@@ -8124,22 +7087,22 @@ struct otri *flipedge;                    /* Handle for the triangle abc. */
     tspivot(botright, botrsubseg);
     tspivot(topright, toprsubseg);
     if (toplsubseg.ss == m->dummysub) {
-      tsdissolve(botleft);
+      tsdissolve(m, botleft);
     } else {
       tsbond(botleft, toplsubseg);
     }
     if (botlsubseg.ss == m->dummysub) {
-      tsdissolve(botright);
+      tsdissolve(m, botright);
     } else {
       tsbond(botright, botlsubseg);
     }
     if (botrsubseg.ss == m->dummysub) {
-      tsdissolve(topright);
+      tsdissolve(m, topright);
     } else {
       tsbond(topright, botrsubseg);
     }
     if (toprsubseg.ss == m->dummysub) {
-      tsdissolve(topleft);
+      tsdissolve(m, topleft);
     } else {
       tsbond(topleft, toprsubseg);
     }
@@ -8207,23 +7170,10 @@ struct otri *flipedge;                    /* Handle for the triangle abc. */
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 enum insertvertexresult insertvertex(struct mesh *m, struct behavior *b,
                                      vertex newvertex, struct otri *searchtri,
                                      struct osub *splitseg,
                                      int segmentflaws, int triflaws)
-#else /* not ANSI_DECLARATORS */
-enum insertvertexresult insertvertex(m, b, newvertex, searchtri, splitseg,
-                                     segmentflaws, triflaws)
-struct mesh *m;
-struct behavior *b;
-vertex newvertex;
-struct otri *searchtri;
-struct osub *splitseg;
-int segmentflaws;
-int triflaws;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct otri horiz;
   struct otri top;
@@ -8260,7 +7210,7 @@ int triflaws;
     printf("  Inserting (%.12g, %.12g).\n", newvertex[0], newvertex[1]);
   }
 
-  if (splitseg == (struct osub *) NULL) {
+  if (splitseg == nullptr) {
     /* Find the location of the vertex to be inserted.  Check if a good */
     /*   starting triangle has already been provided by the caller.     */
     if (searchtri->tri == m->dummytri) {
@@ -8291,7 +7241,7 @@ int triflaws;
   }
   if ((intersect == ONEDGE) || (intersect == OUTSIDE)) {
     /* The vertex falls on an edge or boundary. */
-    if (m->checksegments && (splitseg == (struct osub *) NULL)) {
+    if (m->checksegments && (splitseg == nullptr)) {
       /* Check whether the vertex falls on a subsegment. */
       tspivot(horiz, brokensubseg);
       if (brokensubseg.ss != m->dummysub) {
@@ -8353,11 +7303,11 @@ int triflaws;
     setorg(horiz, newvertex);
     for (i = 0; i < m->eextras; i++) {
       /* Set the element attributes of a new triangle. */
-      setelemattribute(newbotright, i, elemattribute(botright, i));
+      setelemattribute(m, newbotright, i, elemattribute(m, botright, i));
     }
     if (b->vararea) {
       /* Set the area constraint of a new triangle. */
-      setareabound(newbotright, areabound(botright));
+      setareabound(m, newbotright, areabound(m, botright));
     }
     if (mirrorflag) {
       dest(topright, topvertex);
@@ -8367,11 +7317,11 @@ int triflaws;
       setorg(topright, newvertex);
       for (i = 0; i < m->eextras; i++) {
         /* Set the element attributes of another new triangle. */
-        setelemattribute(newtopright, i, elemattribute(topright, i));
+        setelemattribute(m, newtopright, i, elemattribute(m, topright, i));
       }
       if (b->vararea) {
         /* Set the area constraint of another new triangle. */
-        setareabound(newtopright, areabound(topright));
+        setareabound(m, newtopright, areabound(m, topright));
       }
     }
 
@@ -8380,13 +7330,13 @@ int triflaws;
     if (m->checksegments) {
       tspivot(botright, botrsubseg);
       if (botrsubseg.ss != m->dummysub) {
-        tsdissolve(botright);
+        tsdissolve(m, botright);
         tsbond(newbotright, botrsubseg);
       }
       if (mirrorflag) {
         tspivot(topright, toprsubseg);
         if (toprsubseg.ss != m->dummysub) {
-          tsdissolve(topright);
+          tsdissolve(m, topright);
           tsbond(newtopright, toprsubseg);
         }
       }
@@ -8405,7 +7355,7 @@ int triflaws;
       bond(newtopright, newbotright);
     }
 
-    if (splitseg != (struct osub *) NULL) {
+    if (splitseg != nullptr) {
       /* Split the subsegment into two. */
       setsdest(*splitseg, newvertex);
       segorg(*splitseg, segmentorg);
@@ -8422,8 +7372,8 @@ int triflaws;
       ssymself(*splitseg);
       /* Transfer the subsegment's boundary marker to the vertex */
       /*   if required.                                          */
-      if (vertexmark(newvertex) == 0) {
-        setvertexmark(newvertex, mark(*splitseg));
+      if (vertexmark(m, newvertex) == 0) {
+        setvertexmark(m, newvertex, mark(*splitseg));
       }
     }
 
@@ -8505,15 +7455,15 @@ int triflaws;
     setapex(horiz, newvertex);
     for (i = 0; i < m->eextras; i++) {
       /* Set the element attributes of the new triangles. */
-      attrib = elemattribute(horiz, i);
-      setelemattribute(newbotleft, i, attrib);
-      setelemattribute(newbotright, i, attrib);
+      attrib = elemattribute(m, horiz, i);
+      setelemattribute(m, newbotleft, i, attrib);
+      setelemattribute(m, newbotright, i, attrib);
     }
     if (b->vararea) {
       /* Set the area constraint of the new triangles. */
-      area = areabound(horiz);
-      setareabound(newbotleft, area);
-      setareabound(newbotright, area);
+      area = areabound(m, horiz);
+      setareabound(m, newbotleft, area);
+      setareabound(m, newbotright, area);
     }
 
     /* There may be subsegments that need to be bonded */
@@ -8521,12 +7471,12 @@ int triflaws;
     if (m->checksegments) {
       tspivot(botleft, botlsubseg);
       if (botlsubseg.ss != m->dummysub) {
-        tsdissolve(botleft);
+        tsdissolve(m, botleft);
         tsbond(newbotleft, botlsubseg);
       }
       tspivot(botright, botrsubseg);
       if (botrsubseg.ss != m->dummysub) {
-        tsdissolve(botright);
+        tsdissolve(m, botright);
         tsbond(newbotright, botrsubseg);
       }
     }
@@ -8546,7 +7496,7 @@ int triflaws;
       poolrestart(&m->flipstackers);
       m->lastflip = (struct flipstacker *) poolalloc(&m->flipstackers);
       m->lastflip->flippedtri = encode(horiz);
-      m->lastflip->prevflip = (struct flipstacker *) NULL;
+      m->lastflip->prevflip = nullptr;
     }
 
 #ifdef SELF_CHECK
@@ -8675,22 +7625,22 @@ int triflaws;
             tspivot(botright, botrsubseg);
             tspivot(topright, toprsubseg);
             if (toplsubseg.ss == m->dummysub) {
-              tsdissolve(topright);
+              tsdissolve(m, topright);
             } else {
               tsbond(topright, toplsubseg);
             }
             if (botlsubseg.ss == m->dummysub) {
-              tsdissolve(topleft);
+              tsdissolve(m, topleft);
             } else {
               tsbond(topleft, botlsubseg);
             }
             if (botrsubseg.ss == m->dummysub) {
-              tsdissolve(botleft);
+              tsdissolve(m, botleft);
             } else {
               tsbond(botleft, botrsubseg);
             }
             if (toprsubseg.ss == m->dummysub) {
-              tsdissolve(botright);
+              tsdissolve(m, botright);
             } else {
               tsbond(botright, toprsubseg);
             }
@@ -8704,21 +7654,21 @@ int triflaws;
           setapex(top, leftvertex);
           for (i = 0; i < m->eextras; i++) {
             /* Take the average of the two triangles' attributes. */
-            attrib = 0.5 * (elemattribute(top, i) + elemattribute(horiz, i));
-            setelemattribute(top, i, attrib);
-            setelemattribute(horiz, i, attrib);
+            attrib = 0.5 * (elemattribute(m, top, i) + elemattribute(m, horiz, i));
+            setelemattribute(m, top, i, attrib);
+            setelemattribute(m, horiz, i, attrib);
           }
           if (b->vararea) {
-            if ((areabound(top) <= 0.0) || (areabound(horiz) <= 0.0)) {
+            if ((areabound(m, top) <= 0.0) || (areabound(m, horiz) <= 0.0)) {
               area = -1.0;
             } else {
               /* Take the average of the two triangles' area constraints.    */
               /*   This prevents small area constraints from migrating a     */
               /*   long, long way from their original location due to flips. */
-              area = 0.5 * (areabound(top) + areabound(horiz));
+              area = 0.5 * (areabound(m, top) + areabound(m, horiz));
             }
-            setareabound(top, area);
-            setareabound(horiz, area);
+            setareabound(m, top, area);
+            setareabound(m, horiz, area);
           }
 
           if (m->checkquality) {
@@ -8729,7 +7679,7 @@ int triflaws;
           }
 
 #ifdef SELF_CHECK
-          if (newvertex != (vertex) NULL) {
+          if (newvertex != nullptr) {
             if (counterclockwise(m, b, leftvertex, newvertex, rightvertex) <
                 0.0) {
               printf("Internal error in insertvertex():\n");
@@ -8864,21 +7814,9 @@ int triflaws;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void triangulatepolygon(struct mesh *m, struct behavior *b,
                         struct otri *firstedge, struct otri *lastedge,
                         int edgecount, int doflip, int triflaws)
-#else /* not ANSI_DECLARATORS */
-void triangulatepolygon(m, b, firstedge, lastedge, edgecount, doflip, triflaws)
-struct mesh *m;
-struct behavior *b;
-struct otri *firstedge;
-struct otri *lastedge;
-int edgecount;
-int doflip;
-int triflaws;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct otri testtri;
   struct otri besttri;
@@ -8963,15 +7901,7 @@ int triflaws;
 
 #ifndef CDT_ONLY
 
-#ifdef ANSI_DECLARATORS
 void deletevertex(struct mesh *m, struct behavior *b, struct otri *deltri)
-#else /* not ANSI_DECLARATORS */
-void deletevertex(m, b, deltri)
-struct mesh *m;
-struct behavior *b;
-struct otri *deltri;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct otri countingtri;
   struct otri firstedge, lastedge;
@@ -9066,14 +7996,7 @@ struct otri *deltri;
 
 #ifndef CDT_ONLY
 
-#ifdef ANSI_DECLARATORS
 void undovertex(struct mesh *m, struct behavior *b)
-#else /* not ANSI_DECLARATORS */
-void undovertex(m, b)
-struct mesh *m;
-struct behavior *b;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct otri fliptri;
   struct otri botleft, botright, topright;
@@ -9086,7 +8009,7 @@ struct behavior *b;
 
   /* Walk through the list of transformations (flips and a vertex insertion) */
   /*   in the reverse of the order in which they were done, and undo them.   */
-  while (m->lastflip != (struct flipstacker *) NULL) {
+  while (m->lastflip != nullptr) {
     /* Find a triangle involved in the last unreversed transformation. */
     decode(m->lastflip->flippedtri, fliptri);
 
@@ -9094,7 +8017,7 @@ struct behavior *b;
     /*   triangle into three (by inserting a vertex in the triangle), a    */
     /*   bisection of two triangles into four (by inserting a vertex in an */
     /*   edge), or an edge flip.                                           */
-    if (m->lastflip->prevflip == (struct flipstacker *) NULL) {
+    if (m->lastflip->prevflip == nullptr) {
       /* Restore a triangle that was split into three triangles, */
       /*   so it is again one triangle.                          */
       dprev(fliptri, botleft);
@@ -9151,7 +8074,7 @@ struct behavior *b;
       }
 
       /* This is the end of the list, sneakily encoded. */
-      m->lastflip->prevflip = (struct flipstacker *) NULL;
+      m->lastflip->prevflip = nullptr;
     } else {
       /* Undo an edge flip. */
       unflip(m, b, &fliptri);
@@ -9213,14 +8136,7 @@ struct behavior *b;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void vertexsort(vertex *sortarray, int arraysize)
-#else /* not ANSI_DECLARATORS */
-void vertexsort(sortarray, arraysize)
-vertex *sortarray;
-int arraysize;
-#endif /* not ANSI_DECLARATORS */
-
 {
   int left, right;
   int pivot;
@@ -9287,16 +8203,7 @@ int arraysize;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void vertexmedian(vertex *sortarray, int arraysize, int median, int axis)
-#else /* not ANSI_DECLARATORS */
-void vertexmedian(sortarray, arraysize, median, axis)
-vertex *sortarray;
-int arraysize;
-int median;
-int axis;
-#endif /* not ANSI_DECLARATORS */
-
 {
   int left, right;
   int pivot;
@@ -9365,15 +8272,7 @@ int axis;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void alternateaxes(vertex *sortarray, int arraysize, int axis)
-#else /* not ANSI_DECLARATORS */
-void alternateaxes(sortarray, arraysize, axis)
-vertex *sortarray;
-int arraysize;
-int axis;
-#endif /* not ANSI_DECLARATORS */
-
 {
   int divider;
 
@@ -9429,21 +8328,9 @@ int axis;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void mergehulls(struct mesh *m, struct behavior *b, struct otri *farleft,
                 struct otri *innerleft, struct otri *innerright,
                 struct otri *farright, int axis)
-#else /* not ANSI_DECLARATORS */
-void mergehulls(m, b, farleft, innerleft, innerright, farright, axis)
-struct mesh *m;
-struct behavior *b;
-struct otri *farleft;
-struct otri *innerleft;
-struct otri *innerright;
-struct otri *farright;
-int axis;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct otri leftcand, rightcand;
   struct otri baseedge;
@@ -9623,7 +8510,7 @@ int axis;
       apex(nextedge, nextapex);
       /* If nextapex is NULL, then no vertex would be exposed; the */
       /*   triangulation would have been eaten right through.      */
-      if (nextapex != (vertex) NULL) {
+      if (nextapex != nullptr) {
         /* Check whether the edge is Delaunay. */
         badedge = incircle(m, b, lowerleft, lowerright, upperleft, nextapex) >
                   0.0;
@@ -9642,9 +8529,9 @@ int axis;
           bond(nextedge, outercasing);
           /* Correct the vertices to reflect the edge flip. */
           setorg(leftcand, lowerleft);
-          setdest(leftcand, NULL);
+          setdest(leftcand, nullptr);
           setapex(leftcand, nextapex);
-          setorg(nextedge, NULL);
+          setorg(nextedge, nullptr);
           setdest(nextedge, upperleft);
           setapex(nextedge, nextapex);
           /* Consider the newly exposed vertex. */
@@ -9652,7 +8539,7 @@ int axis;
           /* What vertex would be exposed if another edge were deleted? */
           otricopy(sidecasing, nextedge);
           apex(nextedge, nextapex);
-          if (nextapex != (vertex) NULL) {
+          if (nextapex != nullptr) {
             /* Check whether the edge is Delaunay. */
             badedge = incircle(m, b, lowerleft, lowerright, upperleft,
                                nextapex) > 0.0;
@@ -9671,7 +8558,7 @@ int axis;
       apex(nextedge, nextapex);
       /* If nextapex is NULL, then no vertex would be exposed; the */
       /*   triangulation would have been eaten right through.      */
-      if (nextapex != (vertex) NULL) {
+      if (nextapex != nullptr) {
         /* Check whether the edge is Delaunay. */
         badedge = incircle(m, b, lowerleft, lowerright, upperright, nextapex) >
                   0.0;
@@ -9689,18 +8576,18 @@ int axis;
           lnextself(nextedge);
           bond(nextedge, outercasing);
           /* Correct the vertices to reflect the edge flip. */
-          setorg(rightcand, NULL);
+          setorg(rightcand, nullptr);
           setdest(rightcand, lowerright);
           setapex(rightcand, nextapex);
           setorg(nextedge, upperright);
-          setdest(nextedge, NULL);
+          setdest(nextedge, nullptr);
           setapex(nextedge, nextapex);
           /* Consider the newly exposed vertex. */
           upperright = nextapex;
           /* What vertex would be exposed if another edge were deleted? */
           otricopy(sidecasing, nextedge);
           apex(nextedge, nextapex);
-          if (nextapex != (vertex) NULL) {
+          if (nextapex != nullptr) {
             /* Check whether the edge is Delaunay. */
             badedge = incircle(m, b, lowerleft, lowerright, upperright,
                                nextapex) > 0.0;
@@ -9756,21 +8643,9 @@ int axis;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void divconqrecurse(struct mesh *m, struct behavior *b, vertex *sortarray,
                     int vertices, int axis,
                     struct otri *farleft, struct otri *farright)
-#else /* not ANSI_DECLARATORS */
-void divconqrecurse(m, b, sortarray, vertices, axis, farleft, farright)
-struct mesh *m;
-struct behavior *b;
-vertex *sortarray;
-int vertices;
-int axis;
-struct otri *farleft;
-struct otri *farright;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct otri midtri, tri1, tri2, tri3;
   struct otri innerleft, innerright;
@@ -9920,15 +8795,7 @@ struct otri *farright;
   }
 }
 
-#ifdef ANSI_DECLARATORS
 long removeghosts(struct mesh *m, struct behavior *b, struct otri *startghost)
-#else /* not ANSI_DECLARATORS */
-long removeghosts(m, b, startghost)
-struct mesh *m;
-struct behavior *b;
-struct otri *startghost;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct otri searchedge;
   struct otri dissolveedge;
@@ -9958,13 +8825,13 @@ struct otri *startghost;
       /* Watch out for the case where all the input vertices are collinear. */
       if (dissolveedge.tri != m->dummytri) {
         org(dissolveedge, markorg);
-        if (vertexmark(markorg) == 0) {
-          setvertexmark(markorg, 1);
+        if (vertexmark(m, markorg) == 0) {
+          setvertexmark(m, markorg, 1);
         }
       }
     }
     /* Remove a bounding triangle from a convex hull triangle. */
-    dissolve(dissolveedge);
+    dissolve(m, dissolveedge);
     /* Find the next bounding triangle. */
     sym(deadtriangle, dissolveedge);
     /* Delete the bounding triangle. */
@@ -9983,14 +8850,7 @@ struct otri *startghost;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 long divconqdelaunay(struct mesh *m, struct behavior *b)
-#else /* not ANSI_DECLARATORS */
-long divconqdelaunay(m, b)
-struct mesh *m;
-struct behavior *b;
-#endif /* not ANSI_DECLARATORS */
-
 {
   vertex *sortarray;
   struct otri hullleft, hullright;
@@ -10019,7 +8879,7 @@ struct behavior *b;
 "Warning:  A duplicate vertex at (%.12g, %.12g) appeared and was ignored.\n",
                sortarray[j][0], sortarray[j][1]);
       }
-      setvertextype(sortarray[j], UNDEADVERTEX);
+      setvertextype(m, sortarray[j], UNDEADVERTEX);
       m->undeads++;
     } else {
       i++;
@@ -10044,7 +8904,7 @@ struct behavior *b;
 
   /* Form the Delaunay triangulation. */
   divconqrecurse(m, b, sortarray, i, 0, &hullleft, &hullright);
-  trifree((VOID *) sortarray);
+  trifree((void *) sortarray);
 
   return removeghosts(m, b, &hullleft);
 }
@@ -10070,14 +8930,7 @@ struct behavior *b;
 
 #ifndef REDUCED
 
-#ifdef ANSI_DECLARATORS
 void boundingbox(struct mesh *m, struct behavior *b)
-#else /* not ANSI_DECLARATORS */
-void boundingbox(m, b)
-struct mesh *m;
-struct behavior *b;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct otri inftri;          /* Handle for the triangular bounding box. */
   REAL width;
@@ -10136,14 +8989,7 @@ struct behavior *b;
 
 #ifndef REDUCED
 
-#ifdef ANSI_DECLARATORS
 long removebox(struct mesh *m, struct behavior *b)
-#else /* not ANSI_DECLARATORS */
-long removebox(m, b)
-struct mesh *m;
-struct behavior *b;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct otri deadtriangle;
   struct otri searchedge;
@@ -10196,13 +9042,13 @@ struct behavior *b;
       /*   will cause a bad pointer reference.                            */
       if (dissolveedge.tri != m->dummytri) {
         org(dissolveedge, markorg);
-        if (vertexmark(markorg) == 0) {
-          setvertexmark(markorg, 1);
+        if (vertexmark(m, markorg) == 0) {
+          setvertexmark(m, markorg, 1);
         }
       }
     }
     /* Disconnect the bounding box triangle from the mesh triangle. */
-    dissolve(dissolveedge);
+    dissolve(m, dissolveedge);
     lnext(nextedge, deadtriangle);
     sym(deadtriangle, nextedge);
     /* Get rid of the bounding box triangle. */
@@ -10215,9 +9061,9 @@ struct behavior *b;
   }
   triangledealloc(m, finaledge.tri);
 
-  trifree((VOID *) m->infvertex1);  /* Deallocate the bounding box vertices. */
-  trifree((VOID *) m->infvertex2);
-  trifree((VOID *) m->infvertex3);
+  trifree((void *) m->infvertex1);  /* Deallocate the bounding box vertices. */
+  trifree((void *) m->infvertex2);
+  trifree((void *) m->infvertex3);
 
   return hullsize;
 }
@@ -10235,14 +9081,7 @@ struct behavior *b;
 
 #ifndef REDUCED
 
-#ifdef ANSI_DECLARATORS
 long incrementaldelaunay(struct mesh *m, struct behavior *b)
-#else /* not ANSI_DECLARATORS */
-long incrementaldelaunay(m, b)
-struct mesh *m;
-struct behavior *b;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct otri starttri;
   vertex vertexloop;
@@ -10254,16 +9093,16 @@ struct behavior *b;
   }
   traversalinit(&m->vertices);
   vertexloop = vertextraverse(m);
-  while (vertexloop != (vertex) NULL) {
+  while (vertexloop != nullptr) {
     starttri.tri = m->dummytri;
-    if (insertvertex(m, b, vertexloop, &starttri, (struct osub *) NULL, 0, 0)
+    if (insertvertex(m, b, vertexloop, &starttri, nullptr, 0, 0)
         == DUPLICATEVERTEX) {
       if (!b->quiet) {
         printf(
 "Warning:  A duplicate vertex at (%.12g, %.12g) appeared and was ignored.\n",
                vertexloop[0], vertexloop[1]);
       }
-      setvertextype(vertexloop, UNDEADVERTEX);
+      setvertextype(m, vertexloop, UNDEADVERTEX);
       m->undeads++;
     }
     vertexloop = vertextraverse(m);
@@ -10284,15 +9123,7 @@ struct behavior *b;
 
 #ifndef REDUCED
 
-#ifdef ANSI_DECLARATORS
 void eventheapinsert(struct event **heap, int heapsize, struct event *newevent)
-#else /* not ANSI_DECLARATORS */
-void eventheapinsert(heap, heapsize, newevent)
-struct event **heap;
-int heapsize;
-struct event *newevent;
-#endif /* not ANSI_DECLARATORS */
-
 {
   REAL eventx, eventy;
   int eventnum;
@@ -10325,15 +9156,7 @@ struct event *newevent;
 
 #ifndef REDUCED
 
-#ifdef ANSI_DECLARATORS
 void eventheapify(struct event **heap, int heapsize, int eventnum)
-#else /* not ANSI_DECLARATORS */
-void eventheapify(heap, heapsize, eventnum)
-struct event **heap;
-int heapsize;
-int eventnum;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct event *thisevent;
   REAL eventx, eventy;
@@ -10381,15 +9204,7 @@ int eventnum;
 
 #ifndef REDUCED
 
-#ifdef ANSI_DECLARATORS
 void eventheapdelete(struct event **heap, int heapsize, int eventnum)
-#else /* not ANSI_DECLARATORS */
-void eventheapdelete(heap, heapsize, eventnum)
-struct event **heap;
-int heapsize;
-int eventnum;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct event *moveevent;
   REAL eventx, eventy;
@@ -10424,17 +9239,8 @@ int eventnum;
 
 #ifndef REDUCED
 
-#ifdef ANSI_DECLARATORS
 void createeventheap(struct mesh *m, struct event ***eventheap,
                      struct event **events, struct event **freeevents)
-#else /* not ANSI_DECLARATORS */
-void createeventheap(m, eventheap, events, freeevents)
-struct mesh *m;
-struct event ***eventheap;
-struct event **events;
-struct event **freeevents;
-#endif /* not ANSI_DECLARATORS */
-
 {
   vertex thisvertex;
   int maxevents;
@@ -10447,14 +9253,14 @@ struct event **freeevents;
   traversalinit(&m->vertices);
   for (i = 0; i < m->invertices; i++) {
     thisvertex = vertextraverse(m);
-    (*events)[i].eventptr = (VOID *) thisvertex;
+    (*events)[i].eventptr = (void *) thisvertex;
     (*events)[i].xkey = thisvertex[0];
     (*events)[i].ykey = thisvertex[1];
     eventheapinsert(*eventheap, i, *events + i);
   }
-  *freeevents = (struct event *) NULL;
+  *freeevents = nullptr;
   for (i = maxevents - 1; i >= m->invertices; i--) {
-    (*events)[i].eventptr = (VOID *) *freeevents;
+    (*events)[i].eventptr = (void *) *freeevents;
     *freeevents = *events + i;
   }
 }
@@ -10463,15 +9269,7 @@ struct event **freeevents;
 
 #ifndef REDUCED
 
-#ifdef ANSI_DECLARATORS
 int rightofhyperbola(struct mesh *m, struct otri *fronttri, vertex newsite)
-#else /* not ANSI_DECLARATORS */
-int rightofhyperbola(m, fronttri, newsite)
-struct mesh *m;
-struct otri *fronttri;
-vertex newsite;
-#endif /* not ANSI_DECLARATORS */
-
 {
   vertex leftvertex, rightvertex;
   REAL dxa, dya, dxb, dyb;
@@ -10502,17 +9300,7 @@ vertex newsite;
 
 #ifndef REDUCED
 
-#ifdef ANSI_DECLARATORS
 REAL circletop(struct mesh *m, vertex pa, vertex pb, vertex pc, REAL ccwabc)
-#else /* not ANSI_DECLARATORS */
-REAL circletop(m, pa, pb, pc, ccwabc)
-struct mesh *m;
-vertex pa;
-vertex pb;
-vertex pc;
-REAL ccwabc;
-#endif /* not ANSI_DECLARATORS */
-
 {
   REAL xac, yac, xbc, ybc, xab, yab;
   REAL aclen2, bclen2, ablen2;
@@ -10536,31 +9324,22 @@ REAL ccwabc;
 
 #ifndef REDUCED
 
-#ifdef ANSI_DECLARATORS
 void check4deadevent(struct otri *checktri, struct event **freeevents,
                      struct event **eventheap, int *heapsize)
-#else /* not ANSI_DECLARATORS */
-void check4deadevent(checktri, freeevents, eventheap, heapsize)
-struct otri *checktri;
-struct event **freeevents;
-struct event **eventheap;
-int *heapsize;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct event *deadevent;
   vertex eventvertex;
   int eventnum;
 
   org(*checktri, eventvertex);
-  if (eventvertex != (vertex) NULL) {
+  if (eventvertex != nullptr) {
     deadevent = (struct event *) eventvertex;
     eventnum = deadevent->heapposition;
-    deadevent->eventptr = (VOID *) *freeevents;
+    deadevent->eventptr = (void *) *freeevents;
     *freeevents = deadevent;
     eventheapdelete(eventheap, *heapsize, eventnum);
     (*heapsize)--;
-    setorg(*checktri, NULL);
+    setorg(*checktri, nullptr);
   }
 }
 
@@ -10568,17 +9347,8 @@ int *heapsize;
 
 #ifndef REDUCED
 
-#ifdef ANSI_DECLARATORS
 struct splaynode *splay(struct mesh *m, struct splaynode *splaytree,
                         vertex searchpoint, struct otri *searchtri)
-#else /* not ANSI_DECLARATORS */
-struct splaynode *splay(m, splaytree, searchpoint, searchtri)
-struct mesh *m;
-struct splaynode *splaytree;
-vertex searchpoint;
-struct otri *searchtri;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct splaynode *child, *grandchild;
   struct splaynode *lefttree, *righttree;
@@ -10586,8 +9356,8 @@ struct otri *searchtri;
   vertex checkvertex;
   int rightofroot, rightofchild;
 
-  if (splaytree == (struct splaynode *) NULL) {
-    return (struct splaynode *) NULL;
+  if (splaytree == nullptr) {
+    return nullptr;
   }
   dest(splaytree->keyedge, checkvertex);
   if (checkvertex == splaytree->keydest) {
@@ -10598,17 +9368,17 @@ struct otri *searchtri;
     } else {
       child = splaytree->lchild;
     }
-    if (child == (struct splaynode *) NULL) {
+    if (child == nullptr) {
       return splaytree;
     }
     dest(child->keyedge, checkvertex);
     if (checkvertex != child->keydest) {
       child = splay(m, child, searchpoint, searchtri);
-      if (child == (struct splaynode *) NULL) {
+      if (child == nullptr) {
         if (rightofroot) {
-          splaytree->rchild = (struct splaynode *) NULL;
+          splaytree->rchild = nullptr;
         } else {
-          splaytree->lchild = (struct splaynode *) NULL;
+          splaytree->lchild = nullptr;
         }
         return splaytree;
       }
@@ -10622,7 +9392,7 @@ struct otri *searchtri;
       grandchild = splay(m, child->lchild, searchpoint, searchtri);
       child->lchild = grandchild;
     }
-    if (grandchild == (struct splaynode *) NULL) {
+    if (grandchild == nullptr) {
       if (rightofroot) {
         splaytree->rchild = child->lchild;
         child->lchild = splaytree;
@@ -10658,23 +9428,23 @@ struct otri *searchtri;
     lefttree = splay(m, splaytree->lchild, searchpoint, searchtri);
     righttree = splay(m, splaytree->rchild, searchpoint, searchtri);
 
-    pooldealloc(&m->splaynodes, (VOID *) splaytree);
-    if (lefttree == (struct splaynode *) NULL) {
+    pooldealloc(&m->splaynodes, (void *) splaytree);
+    if (lefttree == nullptr) {
       return righttree;
-    } else if (righttree == (struct splaynode *) NULL) {
+    } else if (righttree == nullptr) {
       return lefttree;
-    } else if (lefttree->rchild == (struct splaynode *) NULL) {
+    } else if (lefttree->rchild == nullptr) {
       lefttree->rchild = righttree->lchild;
       righttree->lchild = lefttree;
       return righttree;
-    } else if (righttree->lchild == (struct splaynode *) NULL) {
+    } else if (righttree->lchild == nullptr) {
       righttree->lchild = lefttree->rchild;
       lefttree->rchild = righttree;
       return lefttree;
     } else {
 /*      printf("Holy Toledo!!!\n"); */
       leftright = lefttree->rchild;
-      while (leftright->rchild != (struct splaynode *) NULL) {
+      while (leftright->rchild != nullptr) {
         leftright = leftright->rchild;
       }
       leftright->rchild = righttree;
@@ -10687,34 +9457,25 @@ struct otri *searchtri;
 
 #ifndef REDUCED
 
-#ifdef ANSI_DECLARATORS
 struct splaynode *splayinsert(struct mesh *m, struct splaynode *splayroot,
                               struct otri *newkey, vertex searchpoint)
-#else /* not ANSI_DECLARATORS */
-struct splaynode *splayinsert(m, splayroot, newkey, searchpoint)
-struct mesh *m;
-struct splaynode *splayroot;
-struct otri *newkey;
-vertex searchpoint;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct splaynode *newsplaynode;
 
   newsplaynode = (struct splaynode *) poolalloc(&m->splaynodes);
   otricopy(*newkey, newsplaynode->keyedge);
   dest(*newkey, newsplaynode->keydest);
-  if (splayroot == (struct splaynode *) NULL) {
-    newsplaynode->lchild = (struct splaynode *) NULL;
-    newsplaynode->rchild = (struct splaynode *) NULL;
+  if (splayroot == nullptr) {
+    newsplaynode->lchild = nullptr;
+    newsplaynode->rchild = nullptr;
   } else if (rightofhyperbola(m, &splayroot->keyedge, searchpoint)) {
     newsplaynode->lchild = splayroot;
     newsplaynode->rchild = splayroot->rchild;
-    splayroot->rchild = (struct splaynode *) NULL;
+    splayroot->rchild = nullptr;
   } else {
     newsplaynode->lchild = splayroot->lchild;
     newsplaynode->rchild = splayroot;
-    splayroot->lchild = (struct splaynode *) NULL;
+    splayroot->lchild = nullptr;
   }
   return newsplaynode;
 }
@@ -10723,23 +9484,10 @@ vertex searchpoint;
 
 #ifndef REDUCED
 
-#ifdef ANSI_DECLARATORS
 struct splaynode *circletopinsert(struct mesh *m, struct behavior *b,
                                   struct splaynode *splayroot,
                                   struct otri *newkey,
                                   vertex pa, vertex pb, vertex pc, REAL topy)
-#else /* not ANSI_DECLARATORS */
-struct splaynode *circletopinsert(m, b, splayroot, newkey, pa, pb, pc, topy)
-struct mesh *m;
-struct behavior *b;
-struct splaynode *splayroot;
-struct otri *newkey;
-vertex pa;
-vertex pb;
-vertex pc;
-REAL topy;
-#endif /* not ANSI_DECLARATORS */
-
 {
   REAL ccwabc;
   REAL xac, yac, xbc, ybc;
@@ -10764,21 +9512,9 @@ REAL topy;
 
 #ifndef REDUCED
 
-#ifdef ANSI_DECLARATORS
 struct splaynode *frontlocate(struct mesh *m, struct splaynode *splayroot,
                               struct otri *bottommost, vertex searchvertex,
                               struct otri *searchtri, int *farright)
-#else /* not ANSI_DECLARATORS */
-struct splaynode *frontlocate(m, splayroot, bottommost, searchvertex,
-                              searchtri, farright)
-struct mesh *m;
-struct splaynode *splayroot;
-struct otri *bottommost;
-vertex searchvertex;
-struct otri *searchtri;
-int *farright;
-#endif /* not ANSI_DECLARATORS */
-
 {
   int farrightflag;
   triangle ptr;                       /* Temporary variable used by onext(). */
@@ -10799,14 +9535,7 @@ int *farright;
 
 #ifndef REDUCED
 
-#ifdef ANSI_DECLARATORS
 long sweeplinedelaunay(struct mesh *m, struct behavior *b)
-#else /* not ANSI_DECLARATORS */
-long sweeplinedelaunay(m, b)
-struct mesh *m;
-struct behavior *b;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct event **eventheap;
   struct event *events;
@@ -10830,7 +9559,7 @@ struct behavior *b;
 
   poolinit(&m->splaynodes, sizeof(struct splaynode), SPLAYNODEPERBLOCK,
            SPLAYNODEPERBLOCK, 0);
-  splayroot = (struct splaynode *) NULL;
+  splayroot = nullptr;
 
   if (b->verbose) {
     printf("  Placing vertices in event heap.\n");
@@ -10851,7 +9580,7 @@ struct behavior *b;
   lprevself(righttri);
   bond(lefttri, righttri);
   firstvertex = (vertex) eventheap[0]->eventptr;
-  eventheap[0]->eventptr = (VOID *) freeevents;
+  eventheap[0]->eventptr = (void *) freeevents;
   freeevents = eventheap[0];
   eventheapdelete(eventheap, heapsize, 0);
   heapsize--;
@@ -10861,7 +9590,7 @@ struct behavior *b;
       triexit(1);
     }
     secondvertex = (vertex) eventheap[0]->eventptr;
-    eventheap[0]->eventptr = (VOID *) freeevents;
+    eventheap[0]->eventptr = (void *) freeevents;
     freeevents = eventheap[0];
     eventheapdelete(eventheap, heapsize, 0);
     heapsize--;
@@ -10872,7 +9601,7 @@ struct behavior *b;
 "Warning:  A duplicate vertex at (%.12g, %.12g) appeared and was ignored.\n",
                secondvertex[0], secondvertex[1]);
       }
-      setvertextype(secondvertex, UNDEADVERTEX);
+      setvertextype(m, secondvertex, UNDEADVERTEX);
       m->undeads++;
     }
   } while ((firstvertex[0] == secondvertex[0]) &&
@@ -10889,7 +9618,7 @@ struct behavior *b;
     heapsize--;
     check4events = 1;
     if (nextevent->xkey < m->xmin) {
-      decode(nextevent->eventptr, fliptri);
+      decode(reinterpret_cast<triangle>(nextevent->eventptr), fliptri);
       oprev(fliptri, farlefttri);
       check4deadevent(&farlefttri, &freeevents, eventheap, &heapsize);
       onext(fliptri, farrighttri);
@@ -10899,7 +9628,7 @@ struct behavior *b;
         lprev(fliptri, bottommost);
       }
       flip(m, b, &fliptri);
-      setapex(fliptri, NULL);
+      setapex(fliptri, nullptr);
       lprev(fliptri, lefttri);
       lnext(fliptri, righttri);
       sym(lefttri, farlefttri);
@@ -10921,7 +9650,7 @@ struct behavior *b;
 "Warning:  A duplicate vertex at (%.12g, %.12g) appeared and was ignored.\n",
                  nextvertex[0], nextvertex[1]);
         }
-        setvertextype(nextvertex, UNDEADVERTEX);
+        setvertextype(m, nextvertex, UNDEADVERTEX);
         m->undeads++;
         check4events = 0;
       } else {
@@ -10969,7 +9698,7 @@ struct behavior *b;
         }
       }
     }
-    nextevent->eventptr = (VOID *) freeevents;
+    nextevent->eventptr = (void *) freeevents;
     freeevents = nextevent;
 
     if (check4events) {
@@ -10983,10 +9712,10 @@ struct behavior *b;
         newevent->xkey = m->xminextreme;
         newevent->ykey = circletop(m, leftvertex, midvertex, rightvertex,
                                    lefttest);
-        newevent->eventptr = (VOID *) encode(lefttri);
+        newevent->eventptr = (void *) encode(lefttri);
         eventheapinsert(eventheap, heapsize, newevent);
         heapsize++;
-        setorg(lefttri, newevent);
+        setorg(lefttri, reinterpret_cast<vertex>(newevent));
       }
       apex(righttri, leftvertex);
       org(righttri, midvertex);
@@ -10998,10 +9727,10 @@ struct behavior *b;
         newevent->xkey = m->xminextreme;
         newevent->ykey = circletop(m, leftvertex, midvertex, rightvertex,
                                    righttest);
-        newevent->eventptr = (VOID *) encode(farrighttri);
+        newevent->eventptr = (void *) encode(farrighttri);
         eventheapinsert(eventheap, heapsize, newevent);
         heapsize++;
-        setorg(farrighttri, newevent);
+        setorg(farrighttri, reinterpret_cast<vertex>(newevent));
       }
     }
   }
@@ -11027,14 +9756,7 @@ struct behavior *b;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 long delaunay(struct mesh *m, struct behavior *b)
-#else /* not ANSI_DECLARATORS */
-long delaunay(m, b)
-struct mesh *m;
-struct behavior *b;
-#endif /* not ANSI_DECLARATORS */
-
 {
   long hulledges;
 
@@ -11104,42 +9826,15 @@ struct behavior *b;
 
 #ifdef TRILIBRARY
 
-#ifdef ANSI_DECLARATORS
 int reconstruct(struct mesh *m, struct behavior *b, int *trianglelist,
                 REAL *triangleattriblist, REAL *trianglearealist,
                 int elements, int corners, int attribs,
                 int *segmentlist,int *segmentmarkerlist, int numberofsegments)
-#else /* not ANSI_DECLARATORS */
-int reconstruct(m, b, trianglelist, triangleattriblist, trianglearealist,
-                elements, corners, attribs, segmentlist, segmentmarkerlist,
-                numberofsegments)
-struct mesh *m;
-struct behavior *b;
-int *trianglelist;
-REAL *triangleattriblist;
-REAL *trianglearealist;
-int elements;
-int corners;
-int attribs;
-int *segmentlist;
-int *segmentmarkerlist;
-int numberofsegments;
-#endif /* not ANSI_DECLARATORS */
 
 #else /* not TRILIBRARY */
 
-#ifdef ANSI_DECLARATORS
 long reconstruct(struct mesh *m, struct behavior *b, char *elefilename,
                  char *areafilename, char *polyfilename, FILE *polyfile)
-#else /* not ANSI_DECLARATORS */
-long reconstruct(m, b, elefilename, areafilename, polyfilename, polyfile)
-struct mesh *m;
-struct behavior *b;
-char *elefilename;
-char *areafilename;
-char *polyfilename;
-FILE *polyfile;
-#endif /* not ANSI_DECLARATORS */
 
 #endif /* not TRILIBRARY */
 
@@ -11196,7 +9891,7 @@ FILE *polyfile;
     printf("Opening %s.\n", elefilename);
   }
   elefile = fopen(elefilename, "r");
-  if (elefile == (FILE *) NULL) {
+  if (elefile == nullptr) {
     printf("  Error:  Cannot access file %s.\n", elefilename);
     triexit(1);
   }
@@ -11236,7 +9931,7 @@ FILE *polyfile;
   if (b->poly) {
 #ifdef TRILIBRARY
     m->insegments = numberofsegments;
-    segmentmarkers = segmentmarkerlist != (int *) NULL;
+    segmentmarkers = segmentmarkerlist != nullptr;
 #else /* not TRILIBRARY */
     /* Read number of segments and number of segment */
     /*   boundary markers from .poly file.           */
@@ -11266,7 +9961,7 @@ FILE *polyfile;
       printf("Opening %s.\n", areafilename);
     }
     areafile = fopen(areafilename, "r");
-    if (areafile == (FILE *) NULL) {
+    if (areafile == nullptr) {
       printf("  Error:  Cannot access file %s.\n", areafilename);
       triexit(1);
     }
@@ -11301,7 +9996,7 @@ FILE *polyfile;
   traversalinit(&m->triangles);
   triangleloop.tri = triangletraverse(m);
   elementnumber = b->firstnumber;
-  while (triangleloop.tri != (triangle *) NULL) {
+  while (triangleloop.tri != nullptr) {
 #ifdef TRILIBRARY
     /* Copy the triangle's three corners. */
     for (j = 0; j < 3; j++) {
@@ -11347,7 +10042,7 @@ FILE *polyfile;
             (killvertexindex < b->firstnumber + m->invertices)) {
           /* Delete the non-corner vertex if it's not already deleted. */
           killvertex = getvertex(m, b, killvertexindex);
-          if (vertextype(killvertex) != DEADVERTEX) {
+          if (vertextype(m, killvertex) != DEADVERTEX) {
             vertexdealloc(m, killvertex);
           }
         }
@@ -11359,13 +10054,13 @@ FILE *polyfile;
     /* Read the triangle's attributes. */
     for (j = 0; j < m->eextras; j++) {
 #ifdef TRILIBRARY
-      setelemattribute(triangleloop, j, triangleattriblist[attribindex++]);
+      setelemattribute(m, triangleloop, j, triangleattriblist[attribindex++]);
 #else /* not TRILIBRARY */
       stringptr = findfield(stringptr);
       if (*stringptr == '\0') {
-        setelemattribute(triangleloop, j, 0);
+        setelemattribute(m, triangleloop, j, 0);
       } else {
-        setelemattribute(triangleloop, j,
+        setelemattribute(m, triangleloop, j,
                          (REAL) strtod(stringptr, &stringptr));
       }
 #endif /* not TRILIBRARY */
@@ -11384,7 +10079,7 @@ FILE *polyfile;
         area = (REAL) strtod(stringptr, &stringptr);
       }
 #endif /* not TRILIBRARY */
-      setareabound(triangleloop, area);
+      setareabound(m, triangleloop, area);
     }
 
     /* Set the triangle's vertices. */
@@ -11451,7 +10146,7 @@ FILE *polyfile;
     traversalinit(&m->subsegs);
     subsegloop.ss = subsegtraverse(m);
     segmentnumber = b->firstnumber;
-    while (subsegloop.ss != (subseg *) NULL) {
+    while (subsegloop.ss != nullptr) {
 #ifdef TRILIBRARY
       end[0] = segmentlist[vertexindex++];
       end[1] = segmentlist[vertexindex++];
@@ -11563,7 +10258,7 @@ FILE *polyfile;
       /*   information gets overwritten.                 */
       nexttri = checktri.tri[6 + checktri.orient];
       /* No adjacent subsegment.  (This overwrites the stack info.) */
-      tsdissolve(checktri);
+      tsdissolve(m, checktri);
       sym(checktri, checkneighbor);
       if (checkneighbor.tri == m->dummytri) {
         insertsubseg(m, b, &checktri, 1);
@@ -11573,7 +10268,7 @@ FILE *polyfile;
     }
   }
 
-  trifree((VOID *) vertexarray);
+  trifree((void *) vertexarray);
   return hullsize;
 }
 
@@ -11604,18 +10299,9 @@ FILE *polyfile;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 enum finddirectionresult finddirection(struct mesh *m, struct behavior *b,
                                        struct otri *searchtri,
                                        vertex searchpoint)
-#else /* not ANSI_DECLARATORS */
-enum finddirectionresult finddirection(m, b, searchtri, searchpoint)
-struct mesh *m;
-struct behavior *b;
-struct otri *searchtri;
-vertex searchpoint;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct otri checktri;
   vertex startvertex;
@@ -11719,19 +10405,9 @@ vertex searchpoint;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void segmentintersection(struct mesh *m, struct behavior *b,
                          struct otri *splittri, struct osub *splitsubseg,
                          vertex endpoint2)
-#else /* not ANSI_DECLARATORS */
-void segmentintersection(m, b, splittri, splitsubseg, endpoint2)
-struct mesh *m;
-struct behavior *b;
-struct otri *splittri;
-struct osub *splitsubseg;
-vertex endpoint2;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct osub opposubseg;
   vertex endpoint1;
@@ -11772,8 +10448,8 @@ vertex endpoint2;
   for (i = 0; i < 2 + m->nextras; i++) {
     newvertex[i] = torg[i] + split * (tdest[i] - torg[i]);
   }
-  setvertexmark(newvertex, mark(*splitsubseg));
-  setvertextype(newvertex, INPUTVERTEX);
+  setvertexmark(m, newvertex, mark(*splitsubseg));
+  setvertextype(m, newvertex, INPUTVERTEX);
   if (b->verbose > 1) {
     printf(
   "  Splitting subsegment (%.12g, %.12g) (%.12g, %.12g) at (%.12g, %.12g).\n",
@@ -11787,7 +10463,7 @@ vertex endpoint2;
     internalerror();
   }
   /* Record a triangle whose origin is the new vertex. */
-  setvertex2tri(newvertex, encode(*splittri));
+  setvertex2tri(m, newvertex, encode(*splittri));
   if (m->steinerleft > 0) {
     m->steinerleft--;
   }
@@ -11795,8 +10471,8 @@ vertex endpoint2;
   /* Divide the segment into two, and correct the segment endpoints. */
   ssymself(*splitsubseg);
   spivot(*splitsubseg, opposubseg);
-  sdissolve(*splitsubseg);
-  sdissolve(opposubseg);
+  sdissolve(m, *splitsubseg);
+  sdissolve(m, opposubseg);
   do {
     setsegorg(*splitsubseg, newvertex);
     snextself(*splitsubseg);
@@ -11846,18 +10522,8 @@ vertex endpoint2;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 int scoutsegment(struct mesh *m, struct behavior *b, struct otri *searchtri,
                  vertex endpoint2, int newmark)
-#else /* not ANSI_DECLARATORS */
-int scoutsegment(m, b, searchtri, endpoint2, newmark)
-struct mesh *m;
-struct behavior *b;
-struct otri *searchtri;
-vertex endpoint2;
-int newmark;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct otri crosstri;
   struct osub crosssubseg;
@@ -11930,18 +10596,8 @@ int newmark;
 #ifndef REDUCED
 #ifndef CDT_ONLY
 
-#ifdef ANSI_DECLARATORS
 void conformingedge(struct mesh *m, struct behavior *b,
                     vertex endpoint1, vertex endpoint2, int newmark)
-#else /* not ANSI_DECLARATORS */
-void conformingedge(m, b, endpoint1, endpoint2, newmark)
-struct mesh *m;
-struct behavior *b;
-vertex endpoint1;
-vertex endpoint2;
-int newmark;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct otri searchtri1, searchtri2;
   struct osub brokensubseg;
@@ -11962,12 +10618,12 @@ int newmark;
   for (i = 0; i < 2 + m->nextras; i++) {
     newvertex[i] = 0.5 * (endpoint1[i] + endpoint2[i]);
   }
-  setvertexmark(newvertex, newmark);
-  setvertextype(newvertex, SEGMENTVERTEX);
+  setvertexmark(m, newvertex, newmark);
+  setvertextype(m, newvertex, SEGMENTVERTEX);
   /* No known triangle to search from. */
   searchtri1.tri = m->dummytri;
   /* Attempt to insert the new vertex. */
-  success = insertvertex(m, b, newvertex, &searchtri1, (struct osub *) NULL,
+  success = insertvertex(m, b, newvertex, &searchtri1, nullptr,
                          0, 0);
   if (success == DUPLICATEVERTEX) {
     if (b->verbose > 2) {
@@ -12060,17 +10716,8 @@ int newmark;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void delaunayfixup(struct mesh *m, struct behavior *b,
                    struct otri *fixuptri, int leftside)
-#else /* not ANSI_DECLARATORS */
-void delaunayfixup(m, b, fixuptri, leftside)
-struct mesh *m;
-struct behavior *b;
-struct otri *fixuptri;
-int leftside;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct otri neartri;
   struct otri fartri;
@@ -12180,18 +10827,8 @@ int leftside;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void constrainededge(struct mesh *m, struct behavior *b,
                      struct otri *starttri, vertex endpoint2, int newmark)
-#else /* not ANSI_DECLARATORS */
-void constrainededge(m, b, starttri, endpoint2, newmark)
-struct mesh *m;
-struct behavior *b;
-struct otri *starttri;
-vertex endpoint2;
-int newmark;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct otri fixuptri, fixuptri2;
   struct osub crosssubseg;
@@ -12282,17 +10919,8 @@ int newmark;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void insertsegment(struct mesh *m, struct behavior *b,
                    vertex endpoint1, vertex endpoint2, int newmark)
-#else /* not ANSI_DECLARATORS */
-void insertsegment(m, b, endpoint1, endpoint2, newmark)
-struct mesh *m;
-struct behavior *b;
-vertex endpoint1;
-vertex endpoint2;
-int newmark;
-#endif /* not ANSI_DECLARATORS */
 
 {
   struct otri searchtri1, searchtri2;
@@ -12306,9 +10934,9 @@ int newmark;
   }
 
   /* Find a triangle whose origin is the segment's first endpoint. */
-  checkvertex = (vertex) NULL;
-  encodedtri = vertex2tri(endpoint1);
-  if (encodedtri != (triangle) NULL) {
+  checkvertex = nullptr;
+  encodedtri = vertex2tri(m, endpoint1);
+  if (encodedtri != nullptr) {
     decode(encodedtri, searchtri1);
     org(searchtri1, checkvertex);
   }
@@ -12339,9 +10967,9 @@ int newmark;
   org(searchtri1, endpoint1);
 
   /* Find a triangle whose origin is the segment's second endpoint. */
-  checkvertex = (vertex) NULL;
-  encodedtri = vertex2tri(endpoint2);
-  if (encodedtri != (triangle) NULL) {
+  checkvertex = nullptr;
+  encodedtri = vertex2tri(m, endpoint2);
+  if (encodedtri != nullptr) {
     decode(encodedtri, searchtri2);
     org(searchtri2, checkvertex);
   }
@@ -12394,14 +11022,7 @@ int newmark;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void markhull(struct mesh *m, struct behavior *b)
-#else /* not ANSI_DECLARATORS */
-void markhull(m, b)
-struct mesh *m;
-struct behavior *b;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct otri hulltri;
   struct otri nexttri;
@@ -12440,31 +11061,13 @@ struct behavior *b;
 
 #ifdef TRILIBRARY
 
-#ifdef ANSI_DECLARATORS
 void formskeleton(struct mesh *m, struct behavior *b, int *segmentlist,
                   int *segmentmarkerlist, int numberofsegments)
-#else /* not ANSI_DECLARATORS */
-void formskeleton(m, b, segmentlist, segmentmarkerlist, numberofsegments)
-struct mesh *m;
-struct behavior *b;
-int *segmentlist;
-int *segmentmarkerlist;
-int numberofsegments;
-#endif /* not ANSI_DECLARATORS */
 
 #else /* not TRILIBRARY */
 
-#ifdef ANSI_DECLARATORS
 void formskeleton(struct mesh *m, struct behavior *b,
                   FILE *polyfile, char *polyfilename)
-#else /* not ANSI_DECLARATORS */
-void formskeleton(m, b, polyfile, polyfilename)
-struct mesh *m;
-struct behavior *b;
-FILE *polyfile;
-char *polyfilename;
-#endif /* not ANSI_DECLARATORS */
-
 #endif /* not TRILIBRARY */
 
 {
@@ -12488,7 +11091,7 @@ char *polyfilename;
 #ifdef TRILIBRARY
     strcpy(polyfilename, "input");
     m->insegments = numberofsegments;
-    segmentmarkers = segmentmarkerlist != (int *) NULL;
+    segmentmarkers = segmentmarkerlist != nullptr;
     index = 0;
 #else /* not TRILIBRARY */
     /* Read the segments from a .poly file. */
@@ -12607,14 +11210,7 @@ char *polyfilename;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void infecthull(struct mesh *m, struct behavior *b)
-#else /* not ANSI_DECLARATORS */
-void infecthull(m, b)
-struct mesh *m;
-struct behavior *b;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct otri hulltri;
   struct otri nexttri;
@@ -12653,11 +11249,11 @@ struct behavior *b;
           setmark(hullsubseg, 1);
           org(hulltri, horg);
           dest(hulltri, hdest);
-          if (vertexmark(horg) == 0) {
-            setvertexmark(horg, 1);
+          if (vertexmark(m, horg) == 0) {
+            setvertexmark(m, horg, 1);
           }
-          if (vertexmark(hdest) == 0) {
-            setvertexmark(hdest, 1);
+          if (vertexmark(m, hdest) == 0) {
+            setvertexmark(m, hdest, 1);
           }
         }
       }
@@ -12689,14 +11285,7 @@ struct behavior *b;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void plague(struct mesh *m, struct behavior *b)
-#else /* not ANSI_DECLARATORS */
-void plague(m, b)
-struct mesh *m;
-struct behavior *b;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct otri testtri;
   struct otri neighbor;
@@ -12717,7 +11306,7 @@ struct behavior *b;
   /*   their neighbors, then to their neighbors' neighbors.          */
   traversalinit(&m->viri);
   virusloop = (triangle **) traverse(&m->viri);
-  while (virusloop != (triangle **) NULL) {
+  while (virusloop != nullptr) {
     testtri.tri = *virusloop;
     /* A triangle is marked as infected by messing with one of its pointers */
     /*   to subsegments, setting it to an illegal value.  Hence, we have to */
@@ -12752,7 +11341,7 @@ struct behavior *b;
             /* Make sure the subsegment doesn't get deallocated again */
             /*   later when the infected neighbor is visited.         */
             uninfect(neighbor);
-            tsdissolve(neighbor);
+            tsdissolve(m, neighbor);
             infect(neighbor);
           }
         }
@@ -12775,18 +11364,18 @@ struct behavior *b;
           *deadtriangle = neighbor.tri;
         } else {               /* The neighbor is protected by a subsegment. */
           /* Remove this triangle from the subsegment. */
-          stdissolve(neighborsubseg);
+          stdissolve(m, neighborsubseg);
           /* The subsegment becomes a boundary.  Set markers accordingly. */
           if (mark(neighborsubseg) == 0) {
             setmark(neighborsubseg, 1);
           }
           org(neighbor, norg);
           dest(neighbor, ndest);
-          if (vertexmark(norg) == 0) {
-            setvertexmark(norg, 1);
+          if (vertexmark(m, norg) == 0) {
+            setvertexmark(m, norg, 1);
           }
-          if (vertexmark(ndest) == 0) {
-            setvertexmark(ndest, 1);
+          if (vertexmark(m, ndest) == 0) {
+            setvertexmark(m, ndest, 1);
           }
         }
       }
@@ -12803,7 +11392,7 @@ struct behavior *b;
 
   traversalinit(&m->viri);
   virusloop = (triangle **) traverse(&m->viri);
-  while (virusloop != (triangle **) NULL) {
+  while (virusloop != nullptr) {
     testtri.tri = *virusloop;
 
     /* Check each of the three corners of the triangle for elimination. */
@@ -12812,10 +11401,10 @@ struct behavior *b;
     for (testtri.orient = 0; testtri.orient < 3; testtri.orient++) {
       org(testtri, testvertex);
       /* Check if the vertex has already been tested. */
-      if (testvertex != (vertex) NULL) {
+      if (testvertex != nullptr) {
         killorg = 1;
         /* Mark the corner of the triangle as having been tested. */
-        setorg(testtri, NULL);
+        setorg(testtri, nullptr);
         /* Walk counterclockwise about the vertex. */
         onext(testtri, neighbor);
         /* Stop upon reaching a boundary or the starting triangle. */
@@ -12823,7 +11412,7 @@ struct behavior *b;
                (!otriequal(neighbor, testtri))) {
           if (infected(neighbor)) {
             /* Mark the corner of this triangle as having been tested. */
-            setorg(neighbor, NULL);
+            setorg(neighbor, nullptr);
           } else {
             /* A live triangle.  The vertex survives. */
             killorg = 0;
@@ -12839,7 +11428,7 @@ struct behavior *b;
           while (neighbor.tri != m->dummytri) {
             if (infected(neighbor)) {
             /* Mark the corner of this triangle as having been tested. */
-              setorg(neighbor, NULL);
+              setorg(neighbor, nullptr);
             } else {
               /* A live triangle.  The vertex survives. */
               killorg = 0;
@@ -12853,7 +11442,7 @@ struct behavior *b;
             printf("    Deleting vertex (%.12g, %.12g)\n",
                    testvertex[0], testvertex[1]);
           }
-          setvertextype(testvertex, UNDEADVERTEX);
+          setvertextype(m, testvertex, UNDEADVERTEX);
           m->undeads++;
         }
       }
@@ -12870,7 +11459,7 @@ struct behavior *b;
         m->hullsize--;
       } else {
         /* Disconnect the triangle from its neighbor. */
-        dissolve(neighbor);
+        dissolve(m, neighbor);
         /* There is a neighboring triangle on this edge, so this edge */
         /*   becomes a boundary edge when this triangle is deleted.   */
         m->hullsize++;
@@ -12899,16 +11488,8 @@ struct behavior *b;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void regionplague(struct mesh *m, struct behavior *b,
                   REAL attribute, REAL area)
-#else /* not ANSI_DECLARATORS */
-void regionplague(m, b, attribute, area)
-struct mesh *m;
-struct behavior *b;
-REAL attribute;
-REAL area;
-#endif /* not ANSI_DECLARATORS */
 
 {
   struct otri testtri;
@@ -12928,7 +11509,7 @@ REAL area;
   /*   neighbors.                                                          */
   traversalinit(&m->viri);
   virusloop = (triangle **) traverse(&m->viri);
-  while (virusloop != (triangle **) NULL) {
+  while (virusloop != nullptr) {
     testtri.tri = *virusloop;
     /* A triangle is marked as infected by messing with one of its pointers */
     /*   to subsegments, setting it to an illegal value.  Hence, we have to */
@@ -12937,11 +11518,11 @@ REAL area;
     uninfect(testtri);
     if (b->regionattrib) {
       /* Set an attribute. */
-      setelemattribute(testtri, m->eextras, attribute);
+      setelemattribute(m, testtri, m->eextras, attribute);
     }
     if (b->vararea) {
       /* Set an area constraint. */
-      setareabound(testtri, area);
+      setareabound(m, testtri, area);
     }
     if (b->verbose > 2) {
       /* Assign the triangle an orientation for convenience in */
@@ -12991,7 +11572,7 @@ REAL area;
   }
   traversalinit(&m->viri);
   virusloop = (triangle **) traverse(&m->viri);
-  while (virusloop != (triangle **) NULL) {
+  while (virusloop != nullptr) {
     testtri.tri = *virusloop;
     uninfect(testtri);
     virusloop = (triangle **) traverse(&m->viri);
@@ -13012,18 +11593,8 @@ REAL area;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void carveholes(struct mesh *m, struct behavior *b, REAL *holelist, int holes,
                 REAL *regionlist, int regions)
-#else /* not ANSI_DECLARATORS */
-void carveholes(m, b, holelist, holes, regionlist, regions)
-struct mesh *m;
-struct behavior *b;
-REAL *holelist;
-int holes;
-REAL *regionlist;
-int regions;
-#endif /* not ANSI_DECLARATORS */
 
 {
   struct otri searchtri;
@@ -13048,7 +11619,7 @@ int regions;
     regiontris = (struct otri *) trimalloc(regions *
                                            (int) sizeof(struct otri));
   } else {
-    regiontris = (struct otri *) NULL;
+    regiontris = nullptr;
   }
 
   if (((holes > 0) && !b->noholes) || !b->convex || (regions > 0)) {
@@ -13154,8 +11725,8 @@ int regions;
       traversalinit(&m->triangles);
       triangleloop.orient = 0;
       triangleloop.tri = triangletraverse(m);
-      while (triangleloop.tri != (triangle *) NULL) {
-        setelemattribute(triangleloop, m->eextras, 0.0);
+      while (triangleloop.tri != nullptr) {
+        setelemattribute(m, triangleloop, m->eextras, 0.0);
         triangleloop.tri = triangletraverse(m);
       }
     }
@@ -13185,7 +11756,7 @@ int regions;
     pooldeinit(&m->viri);
   }
   if (regions > 0) {
-    trifree((VOID *) regiontris);
+    trifree((void *) regiontris);
   }
 }
 
@@ -13206,14 +11777,7 @@ int regions;
 
 #ifndef CDT_ONLY
 
-#ifdef ANSI_DECLARATORS
 void tallyencs(struct mesh *m, struct behavior *b)
-#else /* not ANSI_DECLARATORS */
-void tallyencs(m, b)
-struct mesh *m;
-struct behavior *b;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct osub subsegloop;
   int dummy;
@@ -13221,7 +11785,7 @@ struct behavior *b;
   traversalinit(&m->subsegs);
   subsegloop.ssorient = 0;
   subsegloop.ss = subsegtraverse(m);
-  while (subsegloop.ss != (subseg *) NULL) {
+  while (subsegloop.ss != nullptr) {
     /* If the segment is encroached, add it to the list. */
     dummy = checkseg4encroach(m, b, &subsegloop);
     subsegloop.ss = subsegtraverse(m);
@@ -13267,15 +11831,7 @@ void precisionerror()
 
 #ifndef CDT_ONLY
 
-#ifdef ANSI_DECLARATORS
 void splitencsegs(struct mesh *m, struct behavior *b, int triflaws)
-#else /* not ANSI_DECLARATORS */
-void splitencsegs(m, b, triflaws)
-struct mesh *m;
-struct behavior *b;
-int triflaws;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct otri enctri;
   struct otri testtri;
@@ -13299,7 +11855,7 @@ int triflaws;
   while ((m->badsubsegs.items > 0) && (m->steinerleft != 0)) {
     traversalinit(&m->badsubsegs);
     encloop = badsubsegtraverse(m);
-    while ((encloop != (struct badsubseg *) NULL) && (m->steinerleft != 0)) {
+    while ((encloop != nullptr) && (m->steinerleft != 0)) {
       sdecode(encloop->encsubseg, currentenc);
       sorg(currentenc, eorg);
       sdest(currentenc, edest);
@@ -13339,7 +11895,7 @@ int triflaws;
         /*   subsegment's diametral circle.                        */
         if (!b->conformdel && !acuteorg && !acutedest) {
           apex(enctri, eapex);
-          while ((vertextype(eapex) == FREEVERTEX) &&
+          while ((vertextype(m, eapex) == FREEVERTEX) &&
                  ((eorg[0] - eapex[0]) * (edest[0] - eapex[0]) +
                   (eorg[1] - eapex[1]) * (edest[1] - eapex[1]) < 0.0)) {
             deletevertex(m, b, &testtri);
@@ -13367,7 +11923,7 @@ int triflaws;
           /* Delete free vertices from the subsegment's diametral circle. */
           if (!b->conformdel && !acuteorg2 && !acutedest2) {
             org(testtri, eapex);
-            while ((vertextype(eapex) == FREEVERTEX) &&
+            while ((vertextype(m, eapex) == FREEVERTEX) &&
                    ((eorg[0] - eapex[0]) * (edest[0] - eapex[0]) +
                     (eorg[1] - eapex[1]) * (edest[1] - eapex[1]) < 0.0)) {
               deletevertex(m, b, &testtri);
@@ -13427,8 +11983,8 @@ int triflaws;
           }
         }
 
-        setvertexmark(newvertex, mark(currentenc));
-        setvertextype(newvertex, SEGMENTVERTEX);
+        setvertexmark(m, newvertex, mark(currentenc));
+        setvertextype(m, newvertex, SEGMENTVERTEX);
         if (b->verbose > 1) {
           printf(
   "  Splitting subsegment (%.12g, %.12g) (%.12g, %.12g) at (%.12g, %.12g).\n",
@@ -13479,14 +12035,7 @@ int triflaws;
 
 #ifndef CDT_ONLY
 
-#ifdef ANSI_DECLARATORS
 void tallyfaces(struct mesh *m, struct behavior *b)
-#else /* not ANSI_DECLARATORS */
-void tallyfaces(m, b)
-struct mesh *m;
-struct behavior *b;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct otri triangleloop;
 
@@ -13496,7 +12045,7 @@ struct behavior *b;
   traversalinit(&m->triangles);
   triangleloop.orient = 0;
   triangleloop.tri = triangletraverse(m);
-  while (triangleloop.tri != (triangle *) NULL) {
+  while (triangleloop.tri != nullptr) {
     /* If the triangle is bad, enqueue it. */
     testtriangle(m, b, &triangleloop);
     triangleloop.tri = triangletraverse(m);
@@ -13515,16 +12064,8 @@ struct behavior *b;
 
 #ifndef CDT_ONLY
 
-#ifdef ANSI_DECLARATORS
 void splittriangle(struct mesh *m, struct behavior *b,
                    struct badtriang *badtri)
-#else /* not ANSI_DECLARATORS */
-void splittriangle(m, b, badtri)
-struct mesh *m;
-struct behavior *b;
-struct badtriang *badtri;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct otri badotri;
   vertex borg, bdest, bapex;
@@ -13573,8 +12114,8 @@ struct badtriang *badtri;
       }
       /* The new vertex must be in the interior, and therefore is a */
       /*   free vertex with a marker of zero.                       */
-      setvertexmark(newvertex, 0);
-      setvertextype(newvertex, FREEVERTEX);
+      setvertexmark(m, newvertex, 0);
+      setvertextype(m, newvertex, FREEVERTEX);
 
       /* Ensure that the handle `badotri' does not represent the longest  */
       /*   edge of the triangle.  This ensures that the circumcenter must */
@@ -13589,7 +12130,7 @@ struct badtriang *badtri;
 
       /* Insert the circumcenter, searching from the edge of the triangle, */
       /*   and maintain the Delaunay property of the triangulation.        */
-      success = insertvertex(m, b, newvertex, &badotri, (struct osub *) NULL,
+      success = insertvertex(m, b, newvertex, &badotri, nullptr,
                              1, 1);
       if (success == SUCCESSFULVERTEX) {
         if (m->steinerleft > 0) {
@@ -13644,14 +12185,7 @@ struct badtriang *badtri;
 
 #ifndef CDT_ONLY
 
-#ifdef ANSI_DECLARATORS
 void enforcequality(struct mesh *m, struct behavior *b)
-#else /* not ANSI_DECLARATORS */
-void enforcequality(m, b)
-struct mesh *m;
-struct behavior *b;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct badtriang *badtri;
   int i;
@@ -13682,7 +12216,7 @@ struct behavior *b;
              BADTRIPERBLOCK, 0);
     /* Initialize the queues of bad triangles. */
     for (i = 0; i < 4096; i++) {
-      m->queuefront[i] = (struct badtriang *) NULL;
+      m->queuefront[i] = nullptr;
     }
     m->firstnonemptyq = -1;
     /* Test all triangles to see if they're bad. */
@@ -13706,7 +12240,7 @@ struct behavior *b;
         splitencsegs(m, b, 1);
       } else {
         /* Return the bad triangle to the pool. */
-        pooldealloc(&m->badtriangles, (VOID *) badtri);
+        pooldealloc(&m->badtriangles, (void *) badtri);
       }
     }
   }
@@ -13743,14 +12277,7 @@ struct behavior *b;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void highorder(struct mesh *m, struct behavior *b)
-#else /* not ANSI_DECLARATORS */
-void highorder(m, b)
-struct mesh *m;
-struct behavior *b;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct otri triangleloop, trisym;
   struct osub checkmark;
@@ -13768,7 +12295,7 @@ struct behavior *b;
   /*   order elements.  This ensures that the primary nodes (at the     */
   /*   corners of elements) will occur earlier in the output files, and */
   /*   have lower indices, than the extra nodes.                        */
-  m->vertices.deaditemstack = (VOID *) NULL;
+  m->vertices.deaditemstack = nullptr;
 
   traversalinit(&m->triangles);
   triangleloop.tri = triangletraverse(m);
@@ -13778,7 +12305,7 @@ struct behavior *b;
   /*   adjacent triangle, operate on the edge only if the current triangle */
   /*   has a smaller pointer than its neighbor.  This way, each edge is    */
   /*   considered only once.                                               */
-  while (triangleloop.tri != (triangle *) NULL) {
+  while (triangleloop.tri != nullptr) {
     for (triangleloop.orient = 0; triangleloop.orient < 3;
          triangleloop.orient++) {
       sym(triangleloop, trisym);
@@ -13793,15 +12320,15 @@ struct behavior *b;
         }
         /* Set the new node's marker to zero or one, depending on */
         /*   whether it lies on a boundary.                       */
-        setvertexmark(newvertex, trisym.tri == m->dummytri);
-        setvertextype(newvertex,
+        setvertexmark(m, newvertex, trisym.tri == m->dummytri);
+        setvertextype(m, newvertex,
                       trisym.tri == m->dummytri ? FREEVERTEX : SEGMENTVERTEX);
         if (b->usesegments) {
           tspivot(triangleloop, checkmark);
           /* If this edge is a segment, transfer the marker to the new node. */
           if (checkmark.ss != m->dummysub) {
-            setvertexmark(newvertex, mark(checkmark));
-            setvertextype(newvertex, SEGMENTVERTEX);
+            setvertexmark(m, newvertex, mark(checkmark));
+            setvertextype(m, newvertex, SEGMENTVERTEX);
           }
         }
         if (b->verbose > 1) {
@@ -13834,22 +12361,14 @@ struct behavior *b;
 
 #ifndef TRILIBRARY
 
-#ifdef ANSI_DECLARATORS
 char *readline(char *string, FILE *infile, char *infilename)
-#else /* not ANSI_DECLARATORS */
-char *readline(string, infile, infilename)
-char *string;
-FILE *infile;
-char *infilename;
-#endif /* not ANSI_DECLARATORS */
-
 {
   char *result;
 
   /* Search for something that looks like a number. */
   do {
     result = fgets(string, INPUTLINESIZE, infile);
-    if (result == (char *) NULL) {
+    if (result == nullptr) {
       printf("  Error:  Unexpected end of file in %s.\n", infilename);
       triexit(1);
     }
@@ -13878,13 +12397,7 @@ char *infilename;
 
 #ifndef TRILIBRARY
 
-#ifdef ANSI_DECLARATORS
 char *findfield(char *string)
-#else /* not ANSI_DECLARATORS */
-char *findfield(string)
-char *string;
-#endif /* not ANSI_DECLARATORS */
-
 {
   char *result;
 
@@ -13919,18 +12432,8 @@ char *string;
 
 #ifndef TRILIBRARY
 
-#ifdef ANSI_DECLARATORS
 void readnodes(struct mesh *m, struct behavior *b, char *nodefilename,
                char *polyfilename, FILE **polyfile)
-#else /* not ANSI_DECLARATORS */
-void readnodes(m, b, nodefilename, polyfilename, polyfile)
-struct mesh *m;
-struct behavior *b;
-char *nodefilename;
-char *polyfilename;
-FILE **polyfile;
-#endif /* not ANSI_DECLARATORS */
-
 {
   FILE *infile;
   vertex vertexloop;
@@ -13949,7 +12452,7 @@ FILE **polyfile;
       printf("Opening %s.\n", polyfilename);
     }
     *polyfile = fopen(polyfilename, "r");
-    if (*polyfile == (FILE *) NULL) {
+    if (*polyfile == nullptr) {
       printf("  Error:  Cannot access file %s.\n", polyfilename);
       triexit(1);
     }
@@ -13988,7 +12491,7 @@ FILE **polyfile;
   } else {
     m->readnodefile = 1;
     infilename = nodefilename;
-    *polyfile = (FILE *) NULL;
+    *polyfile = nullptr;
   }
 
   if (m->readnodefile) {
@@ -13997,7 +12500,7 @@ FILE **polyfile;
       printf("Opening %s.\n", nodefilename);
     }
     infile = fopen(nodefilename, "r");
-    if (infile == (FILE *) NULL) {
+    if (infile == nullptr) {
       printf("  Error:  Cannot access file %s.\n", nodefilename);
       triexit(1);
     }
@@ -14076,16 +12579,16 @@ FILE **polyfile;
       /* Read a vertex marker. */
       stringptr = findfield(stringptr);
       if (*stringptr == '\0') {
-        setvertexmark(vertexloop, 0);
+        setvertexmark(m, vertexloop, 0);
       } else {
         currentmarker = (int) strtol(stringptr, &stringptr, 0);
-        setvertexmark(vertexloop, currentmarker);
+        setvertexmark(m, vertexloop, currentmarker);
       }
     } else {
       /* If no markers are specified in the file, they default to zero. */
-      setvertexmark(vertexloop, 0);
+      setvertexmark(m, vertexloop, 0);
     }
-    setvertextype(vertexloop, INPUTVERTEX);
+    setvertextype(m, vertexloop, INPUTVERTEX);
     /* Determine the smallest and largest x and y coordinates. */
     if (i == 0) {
       m->xmin = m->xmax = x;
@@ -14116,21 +12619,9 @@ FILE **polyfile;
 
 #ifdef TRILIBRARY
 
-#ifdef ANSI_DECLARATORS
 void transfernodes(struct mesh *m, struct behavior *b, REAL *pointlist,
                    REAL *pointattriblist, int *pointmarkerlist,
                    int numberofpoints, int numberofpointattribs)
-#else /* not ANSI_DECLARATORS */
-void transfernodes(m, b, pointlist, pointattriblist, pointmarkerlist,
-                   numberofpoints, numberofpointattribs)
-struct mesh *m;
-struct behavior *b;
-REAL *pointlist;
-REAL *pointattriblist;
-int *pointmarkerlist;
-int numberofpoints;
-int numberofpointattribs;
-#endif /* not ANSI_DECLARATORS */
 
 {
   vertex vertexloop;
@@ -14165,14 +12656,14 @@ int numberofpointattribs;
     for (j = 0; j < numberofpointattribs; j++) {
       vertexloop[2 + j] = pointattriblist[attribindex++];
     }
-    if (pointmarkerlist != (int *) NULL) {
+    if (pointmarkerlist != nullptr) {
       /* Read a vertex marker. */
-      setvertexmark(vertexloop, pointmarkerlist[i]);
+      setvertexmark(m, vertexloop, pointmarkerlist[i]);
     } else {
       /* If no markers are specified, they default to zero. */
-      setvertexmark(vertexloop, 0);
+      setvertexmark(m, vertexloop, 0);
     }
-    setvertextype(vertexloop, INPUTVERTEX);
+    setvertextype(m, vertexloop, INPUTVERTEX);
     /* Determine the smallest and largest x and y coordinates. */
     if (i == 0) {
       m->xmin = m->xmax = x;
@@ -14201,22 +12692,9 @@ int numberofpointattribs;
 
 #ifndef TRILIBRARY
 
-#ifdef ANSI_DECLARATORS
 void readholes(struct mesh *m, struct behavior *b,
                FILE *polyfile, char *polyfilename, REAL **hlist, int *holes,
                REAL **rlist, int *regions)
-#else /* not ANSI_DECLARATORS */
-void readholes(m, b, polyfile, polyfilename, hlist, holes, rlist, regions)
-struct mesh *m;
-struct behavior *b;
-FILE *polyfile;
-char *polyfilename;
-REAL **hlist;
-int *holes;
-REAL **rlist;
-int *regions;
-#endif /* not ANSI_DECLARATORS */
-
 {
   REAL *holelist;
   REAL *regionlist;
@@ -14251,7 +12729,7 @@ int *regions;
       }
     }
   } else {
-    *hlist = (REAL *) NULL;
+    *hlist = nullptr;
   }
 
 #ifndef CDT_ONLY
@@ -14302,7 +12780,7 @@ int *regions;
   } else {
     /* Set `*regions' to zero to avoid an accidental free() later. */
     *regions = 0;
-    *rlist = (REAL *) NULL;
+    *rlist = nullptr;
   }
 #endif /* not CDT_ONLY */
 
@@ -14320,14 +12798,7 @@ int *regions;
 
 #ifndef TRILIBRARY
 
-#ifdef ANSI_DECLARATORS
 void finishfile(FILE *outfile, int argc, char **argv)
-#else /* not ANSI_DECLARATORS */
-void finishfile(outfile, argc, argv)
-FILE *outfile;
-int argc;
-char **argv;
-#endif /* not ANSI_DECLARATORS */
 
 {
   int i;
@@ -14354,31 +12825,13 @@ char **argv;
 
 #ifdef TRILIBRARY
 
-#ifdef ANSI_DECLARATORS
 void writenodes(struct mesh *m, struct behavior *b, REAL **pointlist,
                 REAL **pointattriblist, int **pointmarkerlist)
-#else /* not ANSI_DECLARATORS */
-void writenodes(m, b, pointlist, pointattriblist, pointmarkerlist)
-struct mesh *m;
-struct behavior *b;
-REAL **pointlist;
-REAL **pointattriblist;
-int **pointmarkerlist;
-#endif /* not ANSI_DECLARATORS */
 
 #else /* not TRILIBRARY */
 
-#ifdef ANSI_DECLARATORS
 void writenodes(struct mesh *m, struct behavior *b, char *nodefilename,
                 int argc, char **argv)
-#else /* not ANSI_DECLARATORS */
-void writenodes(m, b, nodefilename, argc, argv)
-struct mesh *m;
-struct behavior *b;
-char *nodefilename;
-int argc;
-char **argv;
-#endif /* not ANSI_DECLARATORS */
 
 #endif /* not TRILIBRARY */
 
@@ -14408,16 +12861,16 @@ char **argv;
     printf("Writing vertices.\n");
   }
   /* Allocate memory for output vertices if necessary. */
-  if (*pointlist == (REAL *) NULL) {
+  if (*pointlist == nullptr) {
     *pointlist = (REAL *) trimalloc((int) (outvertices * 2 * sizeof(REAL)));
   }
   /* Allocate memory for output vertex attributes if necessary. */
-  if ((m->nextras > 0) && (*pointattriblist == (REAL *) NULL)) {
+  if ((m->nextras > 0) && (*pointattriblist == nullptr)) {
     *pointattriblist = (REAL *) trimalloc((int) (outvertices * m->nextras *
                                                  sizeof(REAL)));
   }
   /* Allocate memory for output vertex markers if necessary. */
-  if (!b->nobound && (*pointmarkerlist == (int *) NULL)) {
+  if (!b->nobound && (*pointmarkerlist == nullptr)) {
     *pointmarkerlist = (int *) trimalloc((int) (outvertices * sizeof(int)));
   }
   plist = *pointlist;
@@ -14430,7 +12883,7 @@ char **argv;
     printf("Writing %s.\n", nodefilename);
   }
   outfile = fopen(nodefilename, "w");
-  if (outfile == (FILE *) NULL) {
+  if (outfile == nullptr) {
     printf("  Error:  Cannot create file %s.\n", nodefilename);
     triexit(1);
   }
@@ -14443,8 +12896,8 @@ char **argv;
   traversalinit(&m->vertices);
   vertexnumber = b->firstnumber;
   vertexloop = vertextraverse(m);
-  while (vertexloop != (vertex) NULL) {
-    if (!b->jettison || (vertextype(vertexloop) != UNDEADVERTEX)) {
+  while (vertexloop != nullptr) {
+    if (!b->jettison || (vertextype(m, vertexloop) != UNDEADVERTEX)) {
 #ifdef TRILIBRARY
       /* X and y coordinates. */
       plist[coordindex++] = vertexloop[0];
@@ -14455,7 +12908,7 @@ char **argv;
       }
       if (!b->nobound) {
         /* Copy the boundary marker. */
-        pmlist[vertexnumber - b->firstnumber] = vertexmark(vertexloop);
+        pmlist[vertexnumber - b->firstnumber] = vertexmark(m, vertexloop);
       }
 #else /* not TRILIBRARY */
       /* Vertex number, x and y coordinates. */
@@ -14469,11 +12922,11 @@ char **argv;
         fprintf(outfile, "\n");
       } else {
         /* Write the boundary marker. */
-        fprintf(outfile, "    %d\n", vertexmark(vertexloop));
+        fprintf(outfile, "    %d\n", vertexmark(m, vertexloop));
       }
 #endif /* not TRILIBRARY */
 
-      setvertexmark(vertexloop, vertexnumber);
+      setvertexmark(m, vertexloop, vertexnumber);
       vertexnumber++;
     }
     vertexloop = vertextraverse(m);
@@ -14494,13 +12947,7 @@ char **argv;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void numbernodes(struct mesh *m, struct behavior *b)
-#else /* not ANSI_DECLARATORS */
-void numbernodes(m, b)
-struct mesh *m;
-struct behavior *b;
-#endif /* not ANSI_DECLARATORS */
 
 {
   vertex vertexloop;
@@ -14509,9 +12956,9 @@ struct behavior *b;
   traversalinit(&m->vertices);
   vertexnumber = b->firstnumber;
   vertexloop = vertextraverse(m);
-  while (vertexloop != (vertex) NULL) {
-    setvertexmark(vertexloop, vertexnumber);
-    if (!b->jettison || (vertextype(vertexloop) != UNDEADVERTEX)) {
+  while (vertexloop != nullptr) {
+    setvertexmark(m, vertexloop, vertexnumber);
+    if (!b->jettison || (vertextype(m, vertexloop) != UNDEADVERTEX)) {
       vertexnumber++;
     }
     vertexloop = vertextraverse(m);
@@ -14526,30 +12973,13 @@ struct behavior *b;
 
 #ifdef TRILIBRARY
 
-#ifdef ANSI_DECLARATORS
 void writeelements(struct mesh *m, struct behavior *b,
                    int **trianglelist, REAL **triangleattriblist)
-#else /* not ANSI_DECLARATORS */
-void writeelements(m, b, trianglelist, triangleattriblist)
-struct mesh *m;
-struct behavior *b;
-int **trianglelist;
-REAL **triangleattriblist;
-#endif /* not ANSI_DECLARATORS */
 
 #else /* not TRILIBRARY */
 
-#ifdef ANSI_DECLARATORS
 void writeelements(struct mesh *m, struct behavior *b, char *elefilename,
                    int argc, char **argv)
-#else /* not ANSI_DECLARATORS */
-void writeelements(m, b, elefilename, argc, argv)
-struct mesh *m;
-struct behavior *b;
-char *elefilename;
-int argc;
-char **argv;
-#endif /* not ANSI_DECLARATORS */
 
 #endif /* not TRILIBRARY */
 
@@ -14573,13 +13003,13 @@ char **argv;
     printf("Writing triangles.\n");
   }
   /* Allocate memory for output triangles if necessary. */
-  if (*trianglelist == (int *) NULL) {
+  if (*trianglelist == nullptr) {
     *trianglelist = (int *) trimalloc((int) (m->triangles.items *
                                              ((b->order + 1) * (b->order + 2) /
                                               2) * sizeof(int)));
   }
   /* Allocate memory for output triangle attributes if necessary. */
-  if ((m->eextras > 0) && (*triangleattriblist == (REAL *) NULL)) {
+  if ((m->eextras > 0) && (*triangleattriblist == nullptr)) {
     *triangleattriblist = (REAL *) trimalloc((int) (m->triangles.items *
                                                     m->eextras *
                                                     sizeof(REAL)));
@@ -14593,7 +13023,7 @@ char **argv;
     printf("Writing %s.\n", elefilename);
   }
   outfile = fopen(elefilename, "w");
-  if (outfile == (FILE *) NULL) {
+  if (outfile == nullptr) {
     printf("  Error:  Cannot create file %s.\n", elefilename);
     triexit(1);
   }
@@ -14606,46 +13036,46 @@ char **argv;
   triangleloop.tri = triangletraverse(m);
   triangleloop.orient = 0;
   elementnumber = b->firstnumber;
-  while (triangleloop.tri != (triangle *) NULL) {
+  while (triangleloop.tri != nullptr) {
     org(triangleloop, p1);
     dest(triangleloop, p2);
     apex(triangleloop, p3);
     if (b->order == 1) {
 #ifdef TRILIBRARY
-      tlist[vertexindex++] = vertexmark(p1);
-      tlist[vertexindex++] = vertexmark(p2);
-      tlist[vertexindex++] = vertexmark(p3);
+      tlist[vertexindex++] = vertexmark(m, p1);
+      tlist[vertexindex++] = vertexmark(m, p2);
+      tlist[vertexindex++] = vertexmark(m, p3);
 #else /* not TRILIBRARY */
       /* Triangle number, indices for three vertices. */
       fprintf(outfile, "%4ld    %4d  %4d  %4d", elementnumber,
-              vertexmark(p1), vertexmark(p2), vertexmark(p3));
+              vertexmark(m, p1), vertexmark(m, p2), vertexmark(m, p3));
 #endif /* not TRILIBRARY */
     } else {
       mid1 = (vertex) triangleloop.tri[m->highorderindex + 1];
       mid2 = (vertex) triangleloop.tri[m->highorderindex + 2];
       mid3 = (vertex) triangleloop.tri[m->highorderindex];
 #ifdef TRILIBRARY
-      tlist[vertexindex++] = vertexmark(p1);
-      tlist[vertexindex++] = vertexmark(p2);
-      tlist[vertexindex++] = vertexmark(p3);
-      tlist[vertexindex++] = vertexmark(mid1);
-      tlist[vertexindex++] = vertexmark(mid2);
-      tlist[vertexindex++] = vertexmark(mid3);
+      tlist[vertexindex++] = vertexmark(m, p1);
+      tlist[vertexindex++] = vertexmark(m, p2);
+      tlist[vertexindex++] = vertexmark(m, p3);
+      tlist[vertexindex++] = vertexmark(m, mid1);
+      tlist[vertexindex++] = vertexmark(m, mid2);
+      tlist[vertexindex++] = vertexmark(m, mid3);
 #else /* not TRILIBRARY */
       /* Triangle number, indices for six vertices. */
       fprintf(outfile, "%4ld    %4d  %4d  %4d  %4d  %4d  %4d", elementnumber,
-              vertexmark(p1), vertexmark(p2), vertexmark(p3), vertexmark(mid1),
-              vertexmark(mid2), vertexmark(mid3));
+              vertexmark(m, p1), vertexmark(m, p2), vertexmark(m, p3), vertexmark(m, mid1),
+              vertexmark(m, mid2), vertexmark(m, mid3));
 #endif /* not TRILIBRARY */
     }
 
 #ifdef TRILIBRARY
     for (i = 0; i < m->eextras; i++) {
-      talist[attribindex++] = elemattribute(triangleloop, i);
+      talist[attribindex++] = elemattribute(m, triangleloop, i);
     }
 #else /* not TRILIBRARY */
     for (i = 0; i < m->eextras; i++) {
-      fprintf(outfile, "  %.17g", elemattribute(triangleloop, i));
+      fprintf(outfile, "  %.17g", elemattribute(m, triangleloop, i));
     }
     fprintf(outfile, "\n");
 #endif /* not TRILIBRARY */
@@ -14667,36 +13097,14 @@ char **argv;
 
 #ifdef TRILIBRARY
 
-#ifdef ANSI_DECLARATORS
 void writepoly(struct mesh *m, struct behavior *b,
                int **segmentlist, int **segmentmarkerlist)
-#else /* not ANSI_DECLARATORS */
-void writepoly(m, b, segmentlist, segmentmarkerlist)
-struct mesh *m;
-struct behavior *b;
-int **segmentlist;
-int **segmentmarkerlist;
-#endif /* not ANSI_DECLARATORS */
 
 #else /* not TRILIBRARY */
 
-#ifdef ANSI_DECLARATORS
 void writepoly(struct mesh *m, struct behavior *b, char *polyfilename,
                REAL *holelist, int holes, REAL *regionlist, int regions,
                int argc, char **argv)
-#else /* not ANSI_DECLARATORS */
-void writepoly(m, b, polyfilename, holelist, holes, regionlist, regions,
-               argc, argv)
-struct mesh *m;
-struct behavior *b;
-char *polyfilename;
-REAL *holelist;
-int holes;
-REAL *regionlist;
-int regions;
-int argc;
-char **argv;
-#endif /* not ANSI_DECLARATORS */
 
 #endif /* not TRILIBRARY */
 
@@ -14718,12 +13126,12 @@ char **argv;
     printf("Writing segments.\n");
   }
   /* Allocate memory for output segments if necessary. */
-  if (*segmentlist == (int *) NULL) {
+  if (*segmentlist == nullptr) {
     *segmentlist = (int *) trimalloc((int) (m->subsegs.items * 2 *
                                             sizeof(int)));
   }
   /* Allocate memory for output segment markers if necessary. */
-  if (!b->nobound && (*segmentmarkerlist == (int *) NULL)) {
+  if (!b->nobound && (*segmentmarkerlist == nullptr)) {
     *segmentmarkerlist = (int *) trimalloc((int) (m->subsegs.items *
                                                   sizeof(int)));
   }
@@ -14735,7 +13143,7 @@ char **argv;
     printf("Writing %s.\n", polyfilename);
   }
   outfile = fopen(polyfilename, "w");
-  if (outfile == (FILE *) NULL) {
+  if (outfile == nullptr) {
     printf("  Error:  Cannot create file %s.\n", polyfilename);
     triexit(1);
   }
@@ -14752,13 +13160,13 @@ char **argv;
   subsegloop.ss = subsegtraverse(m);
   subsegloop.ssorient = 0;
   subsegnumber = b->firstnumber;
-  while (subsegloop.ss != (subseg *) NULL) {
+  while (subsegloop.ss != nullptr) {
     sorg(subsegloop, endpoint1);
     sdest(subsegloop, endpoint2);
 #ifdef TRILIBRARY
     /* Copy indices of the segment's two endpoints. */
-    slist[index++] = vertexmark(endpoint1);
-    slist[index++] = vertexmark(endpoint2);
+    slist[index++] = vertexmark(m, endpoint1);
+    slist[index++] = vertexmark(m, endpoint2);
     if (!b->nobound) {
       /* Copy the boundary marker. */
       smlist[subsegnumber - b->firstnumber] = mark(subsegloop);
@@ -14767,10 +13175,10 @@ char **argv;
     /* Segment number, indices of its two endpoints, and possibly a marker. */
     if (b->nobound) {
       fprintf(outfile, "%4ld    %4d  %4d\n", subsegnumber,
-              vertexmark(endpoint1), vertexmark(endpoint2));
+              vertexmark(m, endpoint1), vertexmark(m, endpoint2));
     } else {
       fprintf(outfile, "%4ld    %4d  %4d    %4d\n", subsegnumber,
-              vertexmark(endpoint1), vertexmark(endpoint2), mark(subsegloop));
+              vertexmark(m, endpoint1), vertexmark(m, endpoint2), mark(subsegloop));
     }
 #endif /* not TRILIBRARY */
 
@@ -14813,31 +13221,13 @@ char **argv;
 
 #ifdef TRILIBRARY
 
-#ifdef ANSI_DECLARATORS
 void writeedges(struct mesh *m, struct behavior *b,
                 int **edgelist, int **edgemarkerlist)
-#else /* not ANSI_DECLARATORS */
-void writeedges(m, b, edgelist, edgemarkerlist)
-struct mesh *m;
-struct behavior *b;
-int **edgelist;
-int **edgemarkerlist;
-#endif /* not ANSI_DECLARATORS */
 
 #else /* not TRILIBRARY */
 
-#ifdef ANSI_DECLARATORS
 void writeedges(struct mesh *m, struct behavior *b, char *edgefilename,
                 int argc, char **argv)
-#else /* not ANSI_DECLARATORS */
-void writeedges(m, b, edgefilename, argc, argv)
-struct mesh *m;
-struct behavior *b;
-char *edgefilename;
-int argc;
-char **argv;
-#endif /* not ANSI_DECLARATORS */
-
 #endif /* not TRILIBRARY */
 
 {
@@ -14860,11 +13250,11 @@ char **argv;
     printf("Writing edges.\n");
   }
   /* Allocate memory for edges if necessary. */
-  if (*edgelist == (int *) NULL) {
+  if (*edgelist == nullptr) {
     *edgelist = (int *) trimalloc((int) (m->edges * 2 * sizeof(int)));
   }
   /* Allocate memory for edge markers if necessary. */
-  if (!b->nobound && (*edgemarkerlist == (int *) NULL)) {
+  if (!b->nobound && (*edgemarkerlist == nullptr)) {
     *edgemarkerlist = (int *) trimalloc((int) (m->edges * sizeof(int)));
   }
   elist = *edgelist;
@@ -14875,7 +13265,7 @@ char **argv;
     printf("Writing %s.\n", edgefilename);
   }
   outfile = fopen(edgefilename, "w");
-  if (outfile == (FILE *) NULL) {
+  if (outfile == nullptr) {
     printf("  Error:  Cannot create file %s.\n", edgefilename);
     triexit(1);
   }
@@ -14892,7 +13282,7 @@ char **argv;
   /*   adjacent triangle, operate on the edge only if the current triangle */
   /*   has a smaller pointer than its neighbor.  This way, each edge is    */
   /*   considered only once.                                               */
-  while (triangleloop.tri != (triangle *) NULL) {
+  while (triangleloop.tri != nullptr) {
     for (triangleloop.orient = 0; triangleloop.orient < 3;
          triangleloop.orient++) {
       sym(triangleloop, trisym);
@@ -14900,14 +13290,14 @@ char **argv;
         org(triangleloop, p1);
         dest(triangleloop, p2);
 #ifdef TRILIBRARY
-        elist[index++] = vertexmark(p1);
-        elist[index++] = vertexmark(p2);
+        elist[index++] = vertexmark(m, p1);
+        elist[index++] = vertexmark(m, p2);
 #endif /* TRILIBRARY */
         if (b->nobound) {
 #ifndef TRILIBRARY
           /* Edge number, indices of two endpoints. */
           fprintf(outfile, "%4ld   %d  %d\n", edgenumber,
-                  vertexmark(p1), vertexmark(p2));
+                  vertexmark(m, p1), vertexmark(m, p2));
 #endif /* not TRILIBRARY */
         } else {
           /* Edge number, indices of two endpoints, and a boundary marker. */
@@ -14919,14 +13309,14 @@ char **argv;
               emlist[edgenumber - b->firstnumber] = 0;
 #else /* not TRILIBRARY */
               fprintf(outfile, "%4ld   %d  %d  %d\n", edgenumber,
-                      vertexmark(p1), vertexmark(p2), 0);
+                      vertexmark(m, p1), vertexmark(m, p2), 0);
 #endif /* not TRILIBRARY */
             } else {
 #ifdef TRILIBRARY
               emlist[edgenumber - b->firstnumber] = mark(checkmark);
 #else /* not TRILIBRARY */
               fprintf(outfile, "%4ld   %d  %d  %d\n", edgenumber,
-                      vertexmark(p1), vertexmark(p2), mark(checkmark));
+                      vertexmark(m, p1), vertexmark(m, p2), mark(checkmark));
 #endif /* not TRILIBRARY */
             }
           } else {
@@ -14934,7 +13324,7 @@ char **argv;
             emlist[edgenumber - b->firstnumber] = trisym.tri == m->dummytri;
 #else /* not TRILIBRARY */
             fprintf(outfile, "%4ld   %d  %d  %d\n", edgenumber,
-                    vertexmark(p1), vertexmark(p2), trisym.tri == m->dummytri);
+                    vertexmark(m, p1), vertexmark(m, p2), trisym.tri == m->dummytri);
 #endif /* not TRILIBRARY */
           }
         }
@@ -14967,38 +13357,14 @@ char **argv;
 
 #ifdef TRILIBRARY
 
-#ifdef ANSI_DECLARATORS
 void writevoronoi(struct mesh *m, struct behavior *b, REAL **vpointlist,
                   REAL **vpointattriblist, int **vpointmarkerlist,
                   int **vedgelist, int **vedgemarkerlist, REAL **vnormlist)
-#else /* not ANSI_DECLARATORS */
-void writevoronoi(m, b, vpointlist, vpointattriblist, vpointmarkerlist,
-                  vedgelist, vedgemarkerlist, vnormlist)
-struct mesh *m;
-struct behavior *b;
-REAL **vpointlist;
-REAL **vpointattriblist;
-int **vpointmarkerlist;
-int **vedgelist;
-int **vedgemarkerlist;
-REAL **vnormlist;
-#endif /* not ANSI_DECLARATORS */
 
 #else /* not TRILIBRARY */
 
-#ifdef ANSI_DECLARATORS
 void writevoronoi(struct mesh *m, struct behavior *b, char *vnodefilename,
                   char *vedgefilename, int argc, char **argv)
-#else /* not ANSI_DECLARATORS */
-void writevoronoi(m, b, vnodefilename, vedgefilename, argc, argv)
-struct mesh *m;
-struct behavior *b;
-char *vnodefilename;
-char *vedgefilename;
-int argc;
-char **argv;
-#endif /* not ANSI_DECLARATORS */
-
 #endif /* not TRILIBRARY */
 
 {
@@ -15026,16 +13392,16 @@ char **argv;
     printf("Writing Voronoi vertices.\n");
   }
   /* Allocate memory for Voronoi vertices if necessary. */
-  if (*vpointlist == (REAL *) NULL) {
+  if (*vpointlist == nullptr) {
     *vpointlist = (REAL *) trimalloc((int) (m->triangles.items * 2 *
                                             sizeof(REAL)));
   }
   /* Allocate memory for Voronoi vertex attributes if necessary. */
-  if (*vpointattriblist == (REAL *) NULL) {
+  if (*vpointattriblist == nullptr) {
     *vpointattriblist = (REAL *) trimalloc((int) (m->triangles.items *
                                                   m->nextras * sizeof(REAL)));
   }
-  *vpointmarkerlist = (int *) NULL;
+  *vpointmarkerlist = nullptr;
   plist = *vpointlist;
   palist = *vpointattriblist;
   coordindex = 0;
@@ -15045,7 +13411,7 @@ char **argv;
     printf("Writing %s.\n", vnodefilename);
   }
   outfile = fopen(vnodefilename, "w");
-  if (outfile == (FILE *) NULL) {
+  if (outfile == nullptr) {
     printf("  Error:  Cannot create file %s.\n", vnodefilename);
     triexit(1);
   }
@@ -15058,7 +13424,7 @@ char **argv;
   triangleloop.tri = triangletraverse(m);
   triangleloop.orient = 0;
   vnodenumber = b->firstnumber;
-  while (triangleloop.tri != (triangle *) NULL) {
+  while (triangleloop.tri != nullptr) {
     org(triangleloop, torg);
     dest(triangleloop, tdest);
     apex(triangleloop, tapex);
@@ -15098,12 +13464,12 @@ char **argv;
     printf("Writing Voronoi edges.\n");
   }
   /* Allocate memory for output Voronoi edges if necessary. */
-  if (*vedgelist == (int *) NULL) {
+  if (*vedgelist == nullptr) {
     *vedgelist = (int *) trimalloc((int) (m->edges * 2 * sizeof(int)));
   }
-  *vedgemarkerlist = (int *) NULL;
+  *vedgemarkerlist = nullptr;
   /* Allocate memory for output Voronoi norms if necessary. */
-  if (*vnormlist == (REAL *) NULL) {
+  if (*vnormlist == nullptr) {
     *vnormlist = (REAL *) trimalloc((int) (m->edges * 2 * sizeof(REAL)));
   }
   elist = *vedgelist;
@@ -15114,7 +13480,7 @@ char **argv;
     printf("Writing %s.\n", vedgefilename);
   }
   outfile = fopen(vedgefilename, "w");
-  if (outfile == (FILE *) NULL) {
+  if (outfile == nullptr) {
     printf("  Error:  Cannot create file %s.\n", vedgefilename);
     triexit(1);
   }
@@ -15131,7 +13497,7 @@ char **argv;
   /*   adjacent triangle, operate on the edge only if the current triangle */
   /*   has a smaller pointer than its neighbor.  This way, each edge is    */
   /*   considered only once.                                               */
-  while (triangleloop.tri != (triangle *) NULL) {
+  while (triangleloop.tri != nullptr) {
     for (triangleloop.orient = 0; triangleloop.orient < 3;
          triangleloop.orient++) {
       sym(triangleloop, trisym);
@@ -15180,29 +13546,10 @@ char **argv;
 
 #ifdef TRILIBRARY
 
-#ifdef ANSI_DECLARATORS
 void writeneighbors(struct mesh *m, struct behavior *b, int **neighborlist)
-#else /* not ANSI_DECLARATORS */
-void writeneighbors(m, b, neighborlist)
-struct mesh *m;
-struct behavior *b;
-int **neighborlist;
-#endif /* not ANSI_DECLARATORS */
-
 #else /* not TRILIBRARY */
-
-#ifdef ANSI_DECLARATORS
 void writeneighbors(struct mesh *m, struct behavior *b, char *neighborfilename,
                     int argc, char **argv)
-#else /* not ANSI_DECLARATORS */
-void writeneighbors(m, b, neighborfilename, argc, argv)
-struct mesh *m;
-struct behavior *b;
-char *neighborfilename;
-int argc;
-char **argv;
-#endif /* not ANSI_DECLARATORS */
-
 #endif /* not TRILIBRARY */
 
 {
@@ -15222,7 +13569,7 @@ char **argv;
     printf("Writing neighbors.\n");
   }
   /* Allocate memory for neighbors if necessary. */
-  if (*neighborlist == (int *) NULL) {
+  if (*neighborlist == nullptr) {
     *neighborlist = (int *) trimalloc((int) (m->triangles.items * 3 *
                                              sizeof(int)));
   }
@@ -15233,7 +13580,7 @@ char **argv;
     printf("Writing %s.\n", neighborfilename);
   }
   outfile = fopen(neighborfilename, "w");
-  if (outfile == (FILE *) NULL) {
+  if (outfile == nullptr) {
     printf("  Error:  Cannot create file %s.\n", neighborfilename);
     triexit(1);
   }
@@ -15245,7 +13592,7 @@ char **argv;
   triangleloop.tri = triangletraverse(m);
   triangleloop.orient = 0;
   elementnumber = b->firstnumber;
-  while (triangleloop.tri != (triangle *) NULL) {
+  while (triangleloop.tri != nullptr) {
     * (int *) (triangleloop.tri + 6) = (int) elementnumber;
     triangleloop.tri = triangletraverse(m);
     elementnumber++;
@@ -15255,7 +13602,7 @@ char **argv;
   traversalinit(&m->triangles);
   triangleloop.tri = triangletraverse(m);
   elementnumber = b->firstnumber;
-  while (triangleloop.tri != (triangle *) NULL) {
+  while (triangleloop.tri != nullptr) {
     triangleloop.orient = 1;
     sym(triangleloop, trisym);
     neighbor1 = * (int *) (trisym.tri + 6);
@@ -15295,18 +13642,8 @@ char **argv;
 
 #ifndef TRILIBRARY
 
-#ifdef ANSI_DECLARATORS
 void writeoff(struct mesh *m, struct behavior *b, char *offfilename,
               int argc, char **argv)
-#else /* not ANSI_DECLARATORS */
-void writeoff(m, b, offfilename, argc, argv)
-struct mesh *m;
-struct behavior *b;
-char *offfilename;
-int argc;
-char **argv;
-#endif /* not ANSI_DECLARATORS */
-
 {
   FILE *outfile;
   struct otri triangleloop;
@@ -15325,7 +13662,7 @@ char **argv;
   }
 
   outfile = fopen(offfilename, "w");
-  if (outfile == (FILE *) NULL) {
+  if (outfile == nullptr) {
     printf("  Error:  Cannot create file %s.\n", offfilename);
     triexit(1);
   }
@@ -15336,8 +13673,8 @@ char **argv;
   /* Write the vertices. */
   traversalinit(&m->vertices);
   vertexloop = vertextraverse(m);
-  while (vertexloop != (vertex) NULL) {
-    if (!b->jettison || (vertextype(vertexloop) != UNDEADVERTEX)) {
+  while (vertexloop != nullptr) {
+    if (!b->jettison || (vertextype(m, vertexloop) != UNDEADVERTEX)) {
       /* The "0.0" is here because the OFF format uses 3D coordinates. */
       fprintf(outfile, " %.17g  %.17g  %.17g\n", vertexloop[0], vertexloop[1],
               0.0);
@@ -15349,13 +13686,13 @@ char **argv;
   traversalinit(&m->triangles);
   triangleloop.tri = triangletraverse(m);
   triangleloop.orient = 0;
-  while (triangleloop.tri != (triangle *) NULL) {
+  while (triangleloop.tri != nullptr) {
     org(triangleloop, p1);
     dest(triangleloop, p2);
     apex(triangleloop, p3);
     /* The "3" means a three-vertex polygon. */
-    fprintf(outfile, " 3   %4d  %4d  %4d\n", vertexmark(p1) - b->firstnumber,
-            vertexmark(p2) - b->firstnumber, vertexmark(p3) - b->firstnumber);
+    fprintf(outfile, " 3   %4d  %4d  %4d\n", vertexmark(m, p1) - b->firstnumber,
+            vertexmark(m, p2) - b->firstnumber, vertexmark(m, p3) - b->firstnumber);
     triangleloop.tri = triangletraverse(m);
   }
   finishfile(outfile, argc, argv);
@@ -15373,14 +13710,7 @@ char **argv;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void quality_statistics(struct mesh *m, struct behavior *b)
-#else /* not ANSI_DECLARATORS */
-void quality_statistics(m, b)
-struct mesh *m;
-struct behavior *b;
-#endif /* not ANSI_DECLARATORS */
-
 {
   struct otri triangleloop;
   vertex p[3];
@@ -15445,7 +13775,7 @@ struct behavior *b;
   traversalinit(&m->triangles);
   triangleloop.tri = triangletraverse(m);
   triangleloop.orient = 0;
-  while (triangleloop.tri != (triangle *) NULL) {
+  while (triangleloop.tri != nullptr) {
     org(triangleloop, p[0]);
     dest(triangleloop, p[1]);
     apex(triangleloop, p[2]);
@@ -15580,14 +13910,7 @@ struct behavior *b;
 /*                                                                           */
 /*****************************************************************************/
 
-#ifdef ANSI_DECLARATORS
 void statistics(struct mesh *m, struct behavior *b)
-#else /* not ANSI_DECLARATORS */
-void statistics(m, b)
-struct mesh *m;
-struct behavior *b;
-#endif /* not ANSI_DECLARATORS */
-
 {
   printf("\nStatistics:\n\n");
   printf("  Input vertices: %d\n", m->invertices);
@@ -15700,26 +14023,12 @@ struct behavior *b;
 
 #ifdef TRILIBRARY
 
-#ifdef ANSI_DECLARATORS
 void triangulate(char *triswitches, struct triangulateio *in,
                  struct triangulateio *out, struct triangulateio *vorout)
-#else /* not ANSI_DECLARATORS */
-void triangulate(triswitches, in, out, vorout)
-char *triswitches;
-struct triangulateio *in;
-struct triangulateio *out;
-struct triangulateio *vorout;
-#endif /* not ANSI_DECLARATORS */
 
 #else /* not TRILIBRARY */
 
-#ifdef ANSI_DECLARATORS
 int main(int argc, char **argv)
-#else /* not ANSI_DECLARATORS */
-int main(argc, argv)
-int argc;
-char **argv;
-#endif /* not ANSI_DECLARATORS */
 
 #endif /* not TRILIBRARY */
 
@@ -15800,9 +14109,9 @@ char **argv;
 
   /* Ensure that no vertex can be mistaken for a triangular bounding */
   /*   box vertex in insertvertex().                                 */
-  m.infvertex1 = (vertex) NULL;
-  m.infvertex2 = (vertex) NULL;
-  m.infvertex3 = (vertex) NULL;
+  m.infvertex1 = nullptr;
+  m.infvertex2 = nullptr;
+  m.infvertex3 = nullptr;
 
   if (b.usesegments) {
     m.checksegments = 1;                /* Segments will be introduced next. */
@@ -15905,7 +14214,7 @@ char **argv;
   } else {
     out->numberofsegments = m.hullsize;
   }
-  if (vorout != (struct triangulateio *) NULL) {
+  if (vorout != nullptr) {
     vorout->numberofpoints = m.triangles.items;
     vorout->numberofpointattributes = m.nextras;
     vorout->numberofedges = m.edges;
@@ -15967,8 +14276,8 @@ char **argv;
         out->holelist = in->holelist;
         out->regionlist = in->regionlist;
       } else {
-        out->holelist = (REAL *) NULL;
-        out->regionlist = (REAL *) NULL;
+        out->holelist = nullptr;
+        out->regionlist = nullptr;
       }
 #else /* not TRILIBRARY */
       writepoly(&m, &b, b.outpolyfilename, holearray, m.holes, regionarray,
@@ -15979,11 +14288,11 @@ char **argv;
 #ifndef TRILIBRARY
 #ifndef CDT_ONLY
   if (m.regions > 0) {
-    trifree((VOID *) regionarray);
+    trifree((void *) regionarray);
   }
 #endif /* not CDT_ONLY */
   if (m.holes > 0) {
-    trifree((VOID *) holearray);
+    trifree((void *) holearray);
   }
   if (b.geomview) {
     writeoff(&m, &b, b.offfilename, argc, argv);
