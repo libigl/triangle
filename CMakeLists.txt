@@ -11,9 +11,15 @@ if(BUILD_LIBRARY)
     target_compile_definitions(triangle PRIVATE -DNO_TIMER)
   endif()
   # Generate position independent code
-  set_target_properties(triangle PROPERTIES POSITION_INDEPENDENT_CODE ON)
+  set_target_properties(triangle PROPERTIES 
+    POSITION_INDEPENDENT_CODE ON
+    PUBLIC_HEADER triangle.h
+  )
+  install(TARGETS triangle
+    PUBLIC_HEADER
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  )
 endif()
-
 
 if(BUILD_EXECUTABLE)
   add_executable(triangle_exec triangle.cpp)
@@ -22,4 +28,8 @@ if(BUILD_EXECUTABLE)
     target_compile_definitions(triangle_exec PRIVATE -DNO_TIMER)
   endif()
   set_target_properties(triangle_exec PROPERTIES OUTPUT_NAME triangle)
+  install(TARGETS triangle_exec
+    DESTINATION ${CMAKE_INSTALL_BINDIR}
+  )
 endif()
+
